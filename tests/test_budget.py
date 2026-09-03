@@ -15,6 +15,18 @@ class FakeRedis:
     def expire(self, key, seconds):
         self.expirations[key] = seconds
 
+    def get(self, key):
+        return self.values.get(key)
+
+    def set(self, key, value, ex):
+        self.values[key] = value
+        self.expirations[key] = ex
+
+    def delete(self, *keys):
+        for key in keys:
+            self.values.pop(key, None)
+            self.expirations.pop(key, None)
+
 
 def test_local_budget_blocks_after_limit():
     budget = LocalBudget(2)
@@ -45,3 +57,18 @@ def test_step_budget_stops_before_second_redis_write(monkeypatch):
     with pytest.raises(BudgetExceeded):
         budget.consume()
     assert fake.values["agent:budget:local"] == 1
+
+
+def test_history_serialization_and_clear(monkeypatch):
+    fake = FakeRedis()
+    monkeypatch.setattr("budget.redis.from_url", lambda *args, **kwargs: fake)
+    budget = StepBudget("history", 2)
+
+    budget.save_history([{"role": "user", "content": "hello", "ignored": True}])
+
+    assert budget.load_history() == [{"role": "user", "content": "hello"}]
+    assert fake.expirations[budget.history_key] == budget.redis.TTL_SECONDS
+    budget.consume()
+    budget.clear()
+    assert budget.local.current == 0
+    assert fake.values == {}

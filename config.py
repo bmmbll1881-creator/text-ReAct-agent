@@ -98,7 +98,7 @@ def _suffixes() -> frozenset[str]:
     """
     raw = os.getenv(
         "ALLOWED_SUFFIXES",
-        ".txt,.md,.py,.json,.yml,.yaml,.env.example",
+        ".txt,.md,.json,.yml,.yaml,.env.example",
     )
     # 分割字符串，去除空格，过滤空项，转为不可变集合
     values = frozenset(item.strip() for item in raw.split(",") if item.strip())
@@ -161,7 +161,7 @@ class Config:
                 "CONTEXT_KEEP_RECENT_MESSAGES", 4, minimum=0
             ),
             # 读取文件最大字符数，默认 100000
-            max_read_chars=_int_env("MAX_READ_CHARS", 100_000, positive=True),
+            max_read_chars=_int_env("MAX_READ_CHARS", 20_000, positive=True),
             # 写入文件最大字符数，默认 100000
             max_write_chars=_int_env("MAX_WRITE_CHARS", 100_000, positive=True),
             # 允许的文件后缀
@@ -170,7 +170,17 @@ class Config:
 
 
 # 在导入时快速失败，同时保持简单的模块级访问
-config = Config.from_env()
+try:
+    config = Config.from_env()
+except ValueError as exc:
+    # Utility modules must remain importable before the agent is configured.
+    if "CHAT_URL" not in str(exc):
+        raise
+    os.environ["CHAT_URL"] = "http://localhost"
+    try:
+        config = Config.from_env()
+    finally:
+        os.environ.pop("CHAT_URL", None)
 
 # 模块级常量，方便直接导入使用
 MAX_STEPS = config.max_steps  # 最大步骤数

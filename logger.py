@@ -19,8 +19,8 @@ def _redact_sensitive(key, value):
     """
     key_lower = key.lower()
 
-    # 屏蔽 API_KEY
-    if 'api_key' in key_lower or 'apikey' in key_lower:
+    # 屏蔽 敏感字段
+    if any(marker in key_lower for marker in ("api_key", "apikey", "token", "secret", "password", "authorization")):
         return '[REDACTED]'
 
     # 处理文件内容

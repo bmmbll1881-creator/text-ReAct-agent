@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from budget import BudgetExceeded, StepBudget
 from parser import parse_response
 from prompts import SYSTEM_PROMPT
-from tools import execute_tool
+from tools import execute_tool_from_dict
 
 load_dotenv()
 
@@ -42,7 +42,7 @@ def run_agent(
     *,
     max_steps: int = MAX_STEPS,
     llm_call=call_llm,
-    tool_executor=execute_tool,
+    tool_executor=execute_tool_from_dict,
     budget=None,
 ) -> str:
     """执行一个 ReAct 任务；依赖可注入，便于测试和嵌入其他应用。"""
