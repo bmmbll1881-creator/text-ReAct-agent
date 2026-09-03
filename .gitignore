@@ -1,0 +1,33 @@
+# Secrets and local environment configuration
+.env
+.env.*
+!.env.example
+
+# Python bytecode and test/tool caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments and packaging output
+.venv/
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# Local workspace and generated evaluation output
+workspace/
+evaluation/eval_report.json
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
