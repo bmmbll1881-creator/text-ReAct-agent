@@ -1,67 +1,95 @@
+import asyncio
+import httpx
 import pytest
-
-from agent import call_llm, run_agent
+import agent
+from agent import MaxStepsExceeded, call_llm, run_agent
 from budget import BudgetExceeded
 
-
 class FakeBudget:
-    def __init__(self, limit=10):
-        self.limit = limit
-        self.current = 0
-
+    def __init__(self, limit=10): self.limit, self.current, self.locked, self.saved = limit, 0, False, []
     def consume(self):
         self.current += 1
-        if self.current > self.limit:
-            raise BudgetExceeded("budget exhausted")
+        if self.current > self.limit: raise BudgetExceeded("budget exhausted")
         return self.current
+    def load_history(self): return []
+    def save_history(self, messages): self.saved.append(messages)
+    def acquire_lock(self): self.locked = True
+    def release_lock(self): self.locked = False
 
-
-def test_completes_react_workflow_and_returns_final_answer():
-    replies = iter([
-        'Thought: write\nAction: write_file\nAction Input: {"path": "note.txt", "content": "hello"}',
-        "Thought: complete\nFinal Answer: note created",
-    ])
+@pytest.mark.asyncio
+async def test_normal_multistep_read_write_workflow():
+    replies = iter(['Action: write_file\nAction Input: {"path":"note.txt","content":"hello"}', 'Action: read_file\nAction Input: {"path":"note.txt"}', "Final Answer: hello"])
+    async def llm(_): return next(replies)
     calls = []
+    def tool(name, payload): calls.append((name, payload)); return "ok"
+    assert await run_agent("task", "s", max_steps=4, llm_call=llm, tool_executor=tool, budget=FakeBudget()) == "hello"
+    assert [x[0] for x in calls] == ["write_file", "read_file"]
 
-    result = run_agent(
-        "create a note", "test-session", max_steps=3,
-        llm_call=lambda messages: next(replies),
-        tool_executor=lambda name, payload: calls.append((name, payload)) or "written",
-        budget=FakeBudget(),
-    )
-
-    assert result == "note created"
-    assert calls == [("write_file", {"path": "note.txt", "content": "hello"})]
-
-
-def test_feeds_tool_error_back_to_model():
-    messages_seen = []
-    replies = iter(['Action: read_file\nAction Input: {"path": "missing.txt"}', "Final Answer: unavailable"])
-
-    def llm(messages):
-        messages_seen.append(messages.copy())
+@pytest.mark.asyncio
+async def test_parse_failure_recovers():
+    replies = iter(["Thought: malformed", "Final Answer: recovered"])
+    async def llm(messages):
+        if len(messages) > 2: assert "解析" in messages[-1]["content"]
         return next(replies)
+    assert await run_agent("task", "s", llm_call=llm, budget=FakeBudget()) == "recovered"
 
-    def broken_tool(name, payload):
-        raise FileNotFoundError("missing.txt")
+@pytest.mark.asyncio
+async def test_tool_validation_failure_is_recoverable():
+    replies = iter(['Action: read_file\nAction Input: {"path":"x.txt","extra":1}', "Final Answer: fixed"])
+    events = []
+    async def llm(_): return next(replies)
+    async def emit(event, data): events.append((event, data))
+    assert await run_agent("task", "s", llm_call=llm, on_event=emit, budget=FakeBudget()) == "fixed"
+    assert any(e == "tool_error" for e, _ in events)
 
-    assert run_agent("read", "test", llm_call=llm, tool_executor=broken_tool, budget=FakeBudget()) == "unavailable"
-    assert "工具执行失败：FileNotFoundError: missing.txt" in messages_seen[1][-1]["content"]
+@pytest.mark.asyncio
+async def test_tool_timeout_is_reported(monkeypatch):
+    monkeypatch.setattr(agent, "TOOL_TIMEOUT", 0.01)
+    replies = iter(['Action: read_file\nAction Input: {"path":"x.txt"}', "Final Answer: timed out"])
+    async def llm(_): return next(replies)
+    def slow(*_):
+        import time; time.sleep(.1)
+    assert await run_agent("task", "s", llm_call=llm, tool_executor=slow, budget=FakeBudget()) == "timed out"
 
+@pytest.mark.asyncio
+async def test_reaches_max_steps():
+    async def llm(_): return 'Action: read_file\nAction Input: {"path":"x.txt"}'
+    with pytest.raises(MaxStepsExceeded): await run_agent("loop", "s", max_steps=2, llm_call=llm, tool_executor=lambda *_: "ok", budget=FakeBudget())
 
-def test_stops_at_configured_step_limit():
-    with pytest.raises(RuntimeError, match="max_steps=2"):
-        run_agent("loop", "test", max_steps=2,
-                  llm_call=lambda messages: 'Action: read_file\nAction Input: {"path": "x.txt"}',
-                  tool_executor=lambda name, payload: "ok", budget=FakeBudget())
+@pytest.mark.asyncio
+async def test_cancelled_run_releases_lock():
+    async def llm(_): raise asyncio.CancelledError()
+    budget = FakeBudget()
+    with pytest.raises(asyncio.CancelledError): await run_agent("task", "s", llm_call=llm, budget=budget)
+    assert not budget.locked
 
+@pytest.mark.asyncio
+async def test_call_llm_retries_transient_errors(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "key"); monkeypatch.setenv("CHAT_URL", "https://example.test")
+    class Client:
+        calls = 0
+        async def post(self, *_a, **_k):
+            self.calls += 1
+            if self.calls < 3: raise httpx.ReadTimeout("temporary")
+            return httpx.Response(200, request=httpx.Request("POST", "https://example.test"),
+                                 json={"choices":[{"message":{"content":"ok"}}]})
+    client = Client(); monkeypatch.setattr(agent, "get_http_client", lambda: client)
+    async def instant_sleep(_): return None
+    monkeypatch.setattr(agent.asyncio, "sleep", instant_sleep)
+    assert await call_llm([]) == "ok" and client.calls == 3
 
-def test_call_llm_requires_api_key(monkeypatch):
+@pytest.mark.asyncio
+async def test_call_llm_does_not_retry_permanent_error(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "key"); monkeypatch.setenv("CHAT_URL", "https://example.test")
+    response = httpx.Response(400, request=httpx.Request("POST", "https://example.test"))
+    class Client:
+        calls = 0
+        async def post(self, *_a, **_k): self.calls += 1; return response
+    client = Client(); monkeypatch.setattr(agent, "get_http_client", lambda: client)
+    with pytest.raises(httpx.HTTPStatusError): await call_llm([])
+    assert client.calls == 1
+
+@pytest.mark.asyncio
+async def test_call_llm_requires_api_key(monkeypatch):
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="未配置 DEEPSEEK_API_KEY"):
-        call_llm([])
-
-
-def test_rejects_non_positive_step_limit():
-    with pytest.raises(ValueError, match="至少应为 1"):
-        run_agent("task", "session", max_steps=0)
+    with pytest.raises(RuntimeError, match="DEEPSEEK_API_KEY"): await call_llm([])

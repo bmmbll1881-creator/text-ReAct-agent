@@ -81,7 +81,7 @@ TOOL_REGISTRY = {
         "model": ReadFileInput,
         "func": _read_file,
         "description": "读取工作目录内的文本文件，返回文件内容（过长时截断）",
-        "input_schema": ReadFileInput.model_json_schema(),  # 可选，用于生成 JSON Schema
+        "input_schema": ReadFileInput.model_json_schema(),
     },
     "write_file": {
         "model": WriteFileInput,
