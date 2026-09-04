@@ -376,7 +376,7 @@ async def run_agent(
                 return result.final_answer
 
             observation = await _execute_action(result, tool_executor, emit)
-            history = await history_manager.append_and_save(history, "user", observation)
+            history = await history_manager.append_and_save(history, "user", observation) # type: ignore
 
         raise MaxStepsExceeded(
             f"达到最大步数 {max_steps}，请增加最大步数或优化任务。"

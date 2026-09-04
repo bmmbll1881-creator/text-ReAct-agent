@@ -100,7 +100,8 @@ def execute_tool(tool_name: str, validated_input: BaseModel) -> str:
     tool = TOOL_REGISTRY[tool_name]
     if not isinstance(validated_input, tool["model"]):
         raise TypeError(f"输入类型错误：{type(validated_input)} 不是 {tool['model']}")
-    return tool["func"](validated_input)
+    func = tool["func"]
+    return func(validated_input) # type: ignore
 
 def execute_tool_from_dict(tool_name: str, raw: dict) -> str:
     if tool_name not in TOOL_REGISTRY:
