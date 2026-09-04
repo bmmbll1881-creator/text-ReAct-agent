@@ -14,12 +14,131 @@ from prompts import SYSTEM_PROMPT
 from tools import TOOL_REGISTRY, execute_tool
 
 EventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
-LLMCallable = Callable[[list[dict[str, str]]], Awaitable[str]]
+LLMCallable = Callable[[list[dict[str, str]], Optional[str]], Awaitable[str]]
 ToolExecutor = Callable[[str, Any], str]  # 工具执行函数，接收工具名和已验证的模型实例
 
 # 模块级异步HTTP客户端，随应用生命周期复用连接池
 _client: Optional[httpx.AsyncClient] = None
 
+class MaxStepsExceeded(Exception):
+    """步骤超限异常。"""
+
+
+def get_http_client() -> httpx.AsyncClient:  # httpx.AsyncClient 的构造是同步的，因为采用懒连接池，所以这里采用同步方式
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(timeout=httpx.Timeout(LLM_TIMEOUT))
+    return _client
+
+
+async def _request_llm(client, url: str, headers: dict[str, str], data: dict[str, Any]) -> httpx.Response:
+    response = await client.post(url, headers=headers, json=data)
+    response.raise_for_status()
+    return response
+
+
+def _is_retryable_status(status: int) -> bool:
+    return status == 429 or 500 <= status < 600
+
+def _build_full_messages(messages: list[dict], skill_prompt: Optional[str]) -> list[dict]:
+    """构建完整的消息列表，包含系统提示"""
+    full_system_prompt = f"{skill_prompt}\n{SYSTEM_PROMPT}" if skill_prompt else SYSTEM_PROMPT
+    full_messages = [{"role": "system", "content": full_system_prompt}]
+    full_messages.extend(messages)
+    return full_messages
+
+
+def _extract_content(response: httpx.Response) -> str:
+    """
+    从 LLM 响应中提取内容，并记录 token 使用（如果存在）。
+    若响应格式错误则抛出 RuntimeError。
+    """
+    # 解析json
+    try:
+        payload = response.json()
+    except json.JSONDecodeError as error:
+        raise RuntimeError("DeepSeek 返回内容格式错误") from error
+
+    try:
+        content = payload["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as error:
+        # 解析响应的 JSON 出现的格式错误， 不重试
+        raise RuntimeError("DeepSeek 返回内容格式错误") from error
+
+    # 记录token使用(如果存在)
+    usage = payload.get("usage")
+    if usage:
+        log_event(
+            "llm_token_usage",
+            "",
+            None,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+        )
+
+    return content
+
+
+async def call_llm(messages: list[dict], skill_prompt: Optional[str] = None) -> str:
+    """
+    异步调用deepseek， 带重试，超时
+    Args:
+        messages: 对话消息（不含 system 角色）
+        skill_prompt: 可选的技能提示，将拼接到全局 SYSTEM_PROMPT 前面
+    """
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise RuntimeError("未配置 DEEPSEEK_API_KEY")
+
+    url = os.getenv("CHAT_URL", "").strip()
+    if not url:
+        raise RuntimeError("未配置 CHAT_URL")
+
+    full_messages = _build_full_messages(messages, skill_prompt)
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "model": "deepseek-chat",
+        "messages": full_messages,
+        "temperature": 0.0,
+    }
+
+    # 使用连接池，避免每次请求都创建连接
+    client = get_http_client()
+    max_attempts = 3
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = await _request_llm(client, url, headers, data)
+            response.raise_for_status()
+            return _extract_content(response)   # 成功则直接返回，提前退出
+
+        except (httpx.ConnectError, httpx.ReadTimeout) as error:
+            # 连接错误或读取超时重试
+            await _retry(attempt, error, max_attempts)
+
+        except httpx.HTTPStatusError as error:
+            # HTTP 状态码错误重试
+            if _is_retryable_status(error.response.status_code):
+                await _retry(attempt, error, max_attempts)
+            else:
+                # 其他 HTTP 错误，不重试
+                raise
+
+    # 兜底，理论上不会执行到这里
+    raise RuntimeError("LLM调用失败")
+
+
+async def _retry(attempt: int, error, max_attempts: int):
+    """重试逻辑，避免重复代码。"""
+    if attempt == max_attempts:
+        raise error
+    wait = 2 ** attempt
+    log_event("llm_retry", "", f"step:{attempt}", reason=str(error), wait=wait)
+    await asyncio.sleep(wait)
 
 class HistoryManager:
     """管理对话历史的追加、压缩和持久化。"""
@@ -29,10 +148,40 @@ class HistoryManager:
         budget: StepBudget,
         task: str,
         emit: EventCallback,
+        llm_call: LLMCallable = call_llm,
     ):
         self.budget = budget
         self.task = task
         self.emit = emit
+        self.llm_call = llm_call
+
+    async def load(self) -> list[dict]:
+        """
+        异步加载会话历史。
+        使用 asyncio.to_thread 将阻塞的存储操作放到线程池，避免阻塞事件循环。
+        返回：准备好的历史消息列表
+        异常：如果加载失败，返回初始化的新历史
+        """
+        try:
+            # 将可能阻塞的 load_history 放到线程池执行
+            history = await asyncio.to_thread(self.budget.load_history)
+        except Exception as e:
+            # 加载失败时，记录错误并返回新历史
+            await self.emit("history_load_error", {"error": str(e)})
+            return [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": self.task},
+            ]
+
+        # 内存操作，不需要异步
+        if not history:
+            return [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": self.task},
+            ]
+        if not any(m.get("role") == "system" for m in history):
+            history.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
+        return history
 
     async def append_and_save(
         self,
@@ -56,7 +205,7 @@ class HistoryManager:
     async def save(self, history: list[dict]) -> list[dict]:
         """保存历史前自动检查并压缩。"""
         history = await self._compress_if_needed(history)
-        self.budget.save_history(history)
+        await asyncio.to_thread(self.budget.save_history, history)
         return history
 
     async def _compress_if_needed(self, history: list[dict]) -> list[dict]:
@@ -66,7 +215,7 @@ class HistoryManager:
             try:
                 history = await compress_conversation(
                     history,
-                    call_llm,
+                    self.llm_call,
                     self.task,
                     SYSTEM_PROMPT,
                     CONTEXT_KEEP_RECENT_MESSAGES,
@@ -84,97 +233,6 @@ class HistoryManager:
                 )
         return history
 
-class MaxStepsExceeded(Exception):
-    """步骤超限异常。"""
-
-
-def get_http_client() -> httpx.AsyncClient:  # httpx.AsyncClient 的构造是同步的，因为采用懒连接池，所以这里采用同步方式
-    global _client
-    if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(timeout=httpx.Timeout(LLM_TIMEOUT))
-    return _client
-
-
-def _should_retry_error(exc: BaseException) -> bool:
-    """判断异常是否需要重试。仅对网络错误、超时和 5xx/429 状态码重试。"""
-    if isinstance(exc, (httpx.ConnectError, httpx.ReadTimeout)):
-        return True
-    if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code == 429 or 500 <= exc.response.status_code < 600
-    return False
-
-
-async def call_llm(messages: list[dict], system_prompt: str | None = None) -> str:
-    """异步调用deepseek， 带重试，超时"""
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        raise RuntimeError("未配置 DEEPSEEK_API_KEY")
-
-    url = os.getenv("CHAT_URL")
-
-    system_prompt = system_prompt + "\n" + SYSTEM_PROMPT if system_prompt else SYSTEM_PROMPT
-
-    headers = {"Authorization": f"Bearer {api_key}",
-               "Content-Type": "application/json"
-               }
-    data = {
-        "model": "deepseek-chat",
-        "system_prompt": system_prompt,
-        "messages": [{"role": "system", "content": SYSTEM_PROMPT}, *messages],
-        "temperature": 0.0,
-    }
-
-    # 使用连接池，避免每次请求都创建连接
-    client = get_http_client()
-    max_attempts = 3
-    for attempt in range(1, max_attempts + 1):
-        try:
-            response = await client.post(url, headers=headers, json=data)
-            response.raise_for_status()
-
-            # 解析json
-            try:
-                payload = response.json()
-                content = payload["choices"][0]["message"]["content"]
-
-                # 记录token使用(如果存在)
-                usage = payload.get("usage")
-                if usage:
-                    log_event("llm_token_usage", "", None,
-                              prompt_tokens=usage.get("prompt_tokens"),
-                              completion_tokens=usage.get("completion_tokens"))
-
-                return content
-
-            except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
-                # 解析响应的 JSON 出现的格式错误， 不重试
-                raise RuntimeError("DeepSeek 返回内容格式错误") from error
-
-        except (httpx.ConnectError, httpx.ReadTimeout) as error:
-            # 连接错误或读取超时重试
-            await _retry(attempt, error, max_attempts)
-
-        except httpx.HTTPStatusError as error:
-            # HTTP 状态码错误重试
-            status = error.response.status_code
-            if status in (429, 500, 502, 503, 504):
-                await _retry(attempt, error, max_attempts)
-            else:
-                # 其他 HTTP 错误，不重试
-                raise
-
-    # 兜底，理论上不会执行到这里
-    raise RuntimeError("LLM调用失败")
-
-
-async def _retry(attempt: int, error, max_attempts: int):
-    """重试逻辑，避免重复代码。"""
-    if attempt == max_attempts:
-        raise
-    wait = 2 ** attempt
-    log_event("llm_retry", "", f"step:{attempt}", reason=str(error), wait=wait)
-    await asyncio.sleep(wait)
-
 
 def _validate_max_steps(max_steps: int | None) -> int:
     """解析并校验最大步数，返回实际使用的步数上限。"""
@@ -184,17 +242,13 @@ def _validate_max_steps(max_steps: int | None) -> int:
     return steps
 
 
-def _load_history(budget: StepBudget, task: str) -> list[dict]:
-    """加载会话历史：新会话初始化为系统提示+用户任务，旧会话按需补充系统提示。"""
-    history = budget.load_history()
-    if not history:
-        return [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": task},
-        ]
-    if not any(m.get("role") == "system" for m in history):
-        history.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
-    return history
+def _resolve_max_steps(max_steps: int | None, budget: StepBudget | None) -> int:
+    """Resolve the effective limit, preferring an existing budget's limit."""
+    if budget is not None:
+        budget_steps = _validate_max_steps(budget.max_steps)
+        # A budget is authoritative; a conflicting call-level value is ignored.
+        return budget_steps
+    return _validate_max_steps(max_steps)
 
 
 def _consume_step(budget: StepBudget) -> None:
@@ -267,15 +321,17 @@ async def run_agent(
         budget: StepBudget | None = None,
 ) -> str:
     """执行一个 ReAct 任务；依赖可注入，便于测试和嵌入其他应用。"""
-    max_steps = _validate_max_steps(max_steps)
-    budget = budget or StepBudget(session_id, max_steps)
-    history = _load_history(budget, task)
+    max_steps = _resolve_max_steps(max_steps, budget)
+    if budget is None:
+        budget = StepBudget(session_id, max_steps)
 
-    async def emit(event_type: str, data: dict[str, Any]) -> None:
+    async def emit(event_type, data):
         if on_event:
             await on_event(event_type, data)
 
-    history_manager = HistoryManager(budget, task, emit)
+    history_manager = HistoryManager(budget, task, emit, llm_call)
+    # 异步加载历史
+    history = await history_manager.load()
 
     try:
         await asyncio.to_thread(budget.acquire_lock)
@@ -288,19 +344,31 @@ async def run_agent(
             await emit("step_start", {"step": step})
 
             try:
-                response_text = await llm_call(history)
+                # 在调用 llm_call 前，确保传入的消息不含 system 消息
+                llm_messages = [m for m in history if m.get("role") != "system"]
+                response_text = await llm_call(llm_messages, None)
             except Exception as error:
                 await emit("llm_error", {"error": str(error)})
                 history = await history_manager.append_many_and_save(
                     history,
-                    [{"role": "assistant", "content": f"LLM错误: {str(error)}"},
+                    [{"role": "user", "content": f"LLM错误: {str(error)}"},
                     {"role": "user", "content": "continue the task"}]
                 )
                 continue
 
             history = await history_manager.append_and_save(history, "assistant", response_text)
 
-            result = parse_response(response_text)
+            try:
+                result = parse_response(response_text)
+            except Exception as e:
+                await emit("parse_error", {"error": str(e)})
+                history = await history_manager.append_and_save(
+                    history,
+                    "user",
+                    f"解析错误：{str(e)}。请严格按照格式输出。",
+                )
+                continue
+
             if result.thought:
                 await emit("thought", {"thought": result.thought})
             if result.final_answer:

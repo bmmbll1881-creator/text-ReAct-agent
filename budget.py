@@ -59,6 +59,7 @@ class StepBudget:
         self.local = LocalBudget(max_steps)
         self.redis = RedisBudget(session_id, max_steps)
         self.history_key = f"agent:history:{session_id}"
+        self.max_steps = max_steps
 
     def consume(self) -> int:
         """先检查本地预算，超过时不再发起 Redis 操作。"""

@@ -6,7 +6,9 @@ from agent import MaxStepsExceeded, call_llm, run_agent
 from budget import BudgetExceeded
 
 class FakeBudget:
-    def __init__(self, limit=10): self.limit, self.current, self.locked, self.saved = limit, 0, False, []
+    def __init__(self, limit=10):
+        self.limit, self.max_steps = limit, limit
+        self.current, self.locked, self.saved = 0, False, []
     def consume(self):
         self.current += 1
         if self.current > self.limit: raise BudgetExceeded("budget exhausted")
@@ -19,7 +21,7 @@ class FakeBudget:
 @pytest.mark.asyncio
 async def test_normal_multistep_read_write_workflow():
     replies = iter(['Action: write_file\nAction Input: {"path":"note.txt","content":"hello"}', 'Action: read_file\nAction Input: {"path":"note.txt"}', "Final Answer: hello"])
-    async def llm(_): return next(replies)
+    async def llm(_, __=None): return next(replies)
     calls = []
     def tool(name, payload): calls.append((name, payload)); return "ok"
     assert await run_agent("task", "s", max_steps=4, llm_call=llm, tool_executor=tool, budget=FakeBudget()) == "hello"
@@ -28,7 +30,7 @@ async def test_normal_multistep_read_write_workflow():
 @pytest.mark.asyncio
 async def test_parse_failure_recovers():
     replies = iter(["Thought: malformed", "Final Answer: recovered"])
-    async def llm(messages):
+    async def llm(messages, __=None):
         if len(messages) > 2: assert "解析" in messages[-1]["content"]
         return next(replies)
     assert await run_agent("task", "s", llm_call=llm, budget=FakeBudget()) == "recovered"
@@ -37,7 +39,7 @@ async def test_parse_failure_recovers():
 async def test_tool_validation_failure_is_recoverable():
     replies = iter(['Action: read_file\nAction Input: {"path":"x.txt","extra":1}', "Final Answer: fixed"])
     events = []
-    async def llm(_): return next(replies)
+    async def llm(_, __=None): return next(replies)
     async def emit(event, data): events.append((event, data))
     assert await run_agent("task", "s", llm_call=llm, on_event=emit, budget=FakeBudget()) == "fixed"
     assert any(e == "tool_error" for e, _ in events)
@@ -46,19 +48,31 @@ async def test_tool_validation_failure_is_recoverable():
 async def test_tool_timeout_is_reported(monkeypatch):
     monkeypatch.setattr(agent, "TOOL_TIMEOUT", 0.01)
     replies = iter(['Action: read_file\nAction Input: {"path":"x.txt"}', "Final Answer: timed out"])
-    async def llm(_): return next(replies)
+    async def llm(_, __=None): return next(replies)
     def slow(*_):
         import time; time.sleep(.1)
     assert await run_agent("task", "s", llm_call=llm, tool_executor=slow, budget=FakeBudget()) == "timed out"
 
 @pytest.mark.asyncio
 async def test_reaches_max_steps():
-    async def llm(_): return 'Action: read_file\nAction Input: {"path":"x.txt"}'
-    with pytest.raises(MaxStepsExceeded): await run_agent("loop", "s", max_steps=2, llm_call=llm, tool_executor=lambda *_: "ok", budget=FakeBudget())
+    async def llm(_, __=None): return 'Action: read_file\nAction Input: {"path":"x.txt"}'
+    with pytest.raises(MaxStepsExceeded):
+        await run_agent("loop", "s", max_steps=2, llm_call=llm,
+                        tool_executor=lambda *_: "ok", budget=FakeBudget())
+
+@pytest.mark.asyncio
+async def test_existing_budget_limit_wins_over_conflicting_max_steps():
+    async def llm(_, __=None):
+        return 'Action: read_file\nAction Input: {"path":"x.txt"}'
+    budget = FakeBudget(limit=1)
+    with pytest.raises(MaxStepsExceeded):
+        await run_agent("loop", "s", max_steps=3, llm_call=llm,
+                        tool_executor=lambda *_: "ok", budget=budget)
+    assert budget.current == 1
 
 @pytest.mark.asyncio
 async def test_cancelled_run_releases_lock():
-    async def llm(_): raise asyncio.CancelledError()
+    async def llm(_, __=None): raise asyncio.CancelledError()
     budget = FakeBudget()
     with pytest.raises(asyncio.CancelledError): await run_agent("task", "s", llm_call=llm, budget=budget)
     assert not budget.locked

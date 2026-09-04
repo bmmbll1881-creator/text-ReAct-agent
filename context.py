@@ -92,10 +92,10 @@ async def compress_conversation(
         )
 
         # 调用 LLM 生成摘要
-        summary_system_prompt = "你是助手，需要根据用户目标、已读文件、已写文件和对话历史，生成一个结构化的摘要。"
-        summary_messages = [{"role": "system", "content": summary_prompt}]
+        summary_skill_prompt = "你是助手，需要根据用户目标、已读文件、已写文件和对话历史，生成一个结构化的摘要。"
+        summary_messages = [{"role": "user", "content": summary_prompt}]
         try:
-            summary = await llm_call(summary_messages, summary_system_prompt)
+            summary = await llm_call(summary_messages, summary_skill_prompt)
             # 截断摘要
             summary = summary[:2000]
         except Exception as e:
