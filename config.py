@@ -173,7 +173,7 @@ class Config:
 try:
     config = Config.from_env()
 except ValueError as exc:
-    # Utility modules must remain importable before the agent is configured.
+    # 工具模块在 Agent 配置前也必须可以导入 / Utility modules remain importable before agent configuration.
     if "CHAT_URL" not in str(exc):
         raise
     os.environ["CHAT_URL"] = "http://localhost"

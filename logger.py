@@ -54,11 +54,10 @@ def log_event(event_type: str, session_id: str, step: str | None = None, **extra
     log_entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "event": event_type,
-        "session_id": session_id
+        "session_id": session_id,
+        "step": step,
     }
 
-    if step is not None:
-        log_entry["step"] = step
 
     # 处理额外字段，过滤并脱敏
     for key, value in extra.items():

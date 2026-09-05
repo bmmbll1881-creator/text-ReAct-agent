@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import time
 from typing import Any, Awaitable, Callable, Optional
 import httpx
 from pydantic import BaseModel
@@ -14,7 +15,7 @@ from prompts import SYSTEM_PROMPT
 from tools import TOOL_REGISTRY, execute_tool
 
 EventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
-LLMCallable = Callable[[list[dict[str, str]], Optional[str]], Awaitable[str]]
+LLMCallable = Callable[[list[dict[str, str]], Optional[str], str, int | None], Awaitable[str]]
 ToolExecutor = Callable[[str, Any], str]  # 工具执行函数，接收工具名和已验证的模型实例
 
 # 模块级异步HTTP客户端，随应用生命周期复用连接池
@@ -48,7 +49,7 @@ def _build_full_messages(messages: list[dict], skill_prompt: Optional[str]) -> l
     return full_messages
 
 
-def _extract_content(response: httpx.Response) -> str:
+def _extract_content(response: httpx.Response, session_id: str, step: int | None) -> str:
     """
     从 LLM 响应中提取内容，并记录 token 使用（如果存在）。
     若响应格式错误则抛出 RuntimeError。
@@ -70,8 +71,8 @@ def _extract_content(response: httpx.Response) -> str:
     if usage:
         log_event(
             "llm_token_usage",
-            "",
-            None,
+            session_id,
+            step,
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
         )
@@ -79,12 +80,18 @@ def _extract_content(response: httpx.Response) -> str:
     return content
 
 
-async def call_llm(messages: list[dict], skill_prompt: Optional[str] = None) -> str:
+async def call_llm(messages: list[dict],
+                   skill_prompt: Optional[str] = None,
+                   session_id: str = "",
+                   step: int | None = None
+    ) -> str:
     """
     异步调用deepseek， 带重试，超时
     Args:
         messages: 对话消息（不含 system 角色）
         skill_prompt: 可选的技能提示，将拼接到全局 SYSTEM_PROMPT 前面
+        session_id: 会话ID，用于记录日志和重试
+        step: 步骤ID，用于记录日志和重试
     """
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
@@ -114,16 +121,16 @@ async def call_llm(messages: list[dict], skill_prompt: Optional[str] = None) -> 
         try:
             response = await _request_llm(client, url, headers, data)
             response.raise_for_status()
-            return _extract_content(response)   # 成功则直接返回，提前退出
+            return _extract_content(response, session_id, step)   # 成功则直接返回，提前退出
 
         except (httpx.ConnectError, httpx.ReadTimeout) as error:
             # 连接错误或读取超时重试
-            await _retry(attempt, error, max_attempts)
+            await _retry(attempt, error, max_attempts, session_id=session_id, step=step)
 
         except httpx.HTTPStatusError as error:
             # HTTP 状态码错误重试
             if _is_retryable_status(error.response.status_code):
-                await _retry(attempt, error, max_attempts)
+                await _retry(attempt, error, max_attempts, session_id=session_id, step=step)
             else:
                 # 其他 HTTP 错误，不重试
                 raise
@@ -132,12 +139,12 @@ async def call_llm(messages: list[dict], skill_prompt: Optional[str] = None) -> 
     raise RuntimeError("LLM调用失败")
 
 
-async def _retry(attempt: int, error, max_attempts: int):
+async def _retry(attempt: int, error, max_attempts: int, *, session_id: str = "", step: int | None = None):
     """重试逻辑，避免重复代码。"""
     if attempt == max_attempts:
         raise error
     wait = 2 ** attempt
-    log_event("llm_retry", "", f"step:{attempt}", reason=str(error), wait=wait)
+    log_event("llm_retry", session_id, step, reason=str(error), wait=wait)
     await asyncio.sleep(wait)
 
 class HistoryManager:
@@ -149,11 +156,14 @@ class HistoryManager:
         task: str,
         emit: EventCallback,
         llm_call: LLMCallable = call_llm,
+        session_id: str = "",
     ):
         self.budget = budget
         self.task = task
         self.emit = emit
         self.llm_call = llm_call
+        self.session_id = session_id
+        self.current_step: int | None = None
 
     async def load(self) -> list[dict]:
         """
@@ -165,9 +175,9 @@ class HistoryManager:
         try:
             # 将可能阻塞的 load_history 放到线程池执行
             history = await asyncio.to_thread(self.budget.load_history)
-        except Exception as e:
+        except Exception as error:
             # 加载失败时，记录错误并返回新历史
-            await self.emit("history_load_error", {"error": str(e)})
+            await self.emit("history_load_error", {"error": str(error)})
             return [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": self.task},
@@ -219,17 +229,19 @@ class HistoryManager:
                     self.task,
                     SYSTEM_PROMPT,
                     CONTEXT_KEEP_RECENT_MESSAGES,
+                    session_id=self.session_id,
+                    step=self.current_step,
                 )
                 new_cnt = len(history)
                 await self.emit(
                     "context_compressed",
                     {"before": old_cnt, "after": new_cnt},
                 )
-            except Exception as e:
+            except Exception as error:
                 # 压缩失败时降级，保留原历史
                 await self.emit(
                     "context_compression_error",
-                    {"error": str(e)},
+                    {"error": str(error)},
                 )
         return history
 
@@ -243,10 +255,10 @@ def _validate_max_steps(max_steps: int | None) -> int:
 
 
 def _resolve_max_steps(max_steps: int | None, budget: StepBudget | None) -> int:
-    """Resolve the effective limit, preferring an existing budget's limit."""
+    """解析最终步数上限，已有 budget 优先 / Resolve the limit, preferring an existing budget."""
     if budget is not None:
         budget_steps = _validate_max_steps(budget.max_steps)
-        # A budget is authoritative; a conflicting call-level value is ignored.
+        # budget 是权威限制，冲突的调用参数将被忽略 / Budget is authoritative; conflicting call values are ignored.
         return budget_steps
     return _validate_max_steps(max_steps)
 
@@ -267,28 +279,29 @@ def _validate_tool_input(model_cls: BaseModel, tool_input: Any) -> Any:
 
 
 async def _execute_action(
-        result: Any,
+        tool_result: Any,
         tool_executor: ToolExecutor,
         emit: EventCallback,
 ) -> str:
     """执行 LLM 输出中解析出的动作，返回 observation 文本。"""
-    if not result.action:
+    started_at = time.perf_counter()
+    if not tool_result.action:
         observation = "未能解析出有效动作，请按格式重新输出。"
         await emit("parse_error", {"error": observation})
         return observation
 
-    tool_name, tool_input = result.action, result.action_input
+    tool_name, tool_input = tool_result.action, tool_result.action_input
     tool_meta = TOOL_REGISTRY.get(tool_name)
     if not tool_meta:
         observation = f"工具不存在: 工具 {tool_name} 不存在"
-        await emit("tool_error", {"error": observation})
+        await emit("tool_error", {"error": observation, "duration_ms": _elapsed_ms(started_at)})
         return observation
 
     try:
         validated_input = _validate_tool_input(tool_meta["model"], tool_input)
     except Exception as error:
         observation = f"输入验证错误: {str(error)}"
-        await emit("tool_error", {"error": observation})
+        await emit("tool_error", {"error": observation, "duration_ms": _elapsed_ms(started_at)})
         return observation
 
     try:
@@ -298,17 +311,21 @@ async def _execute_action(
         )
     except asyncio.TimeoutError:
         observation = f"工具调用超时: 工具 {tool_name} 超时"
-        await emit("tool_error", {"error": observation})
+        await emit("tool_error", {"error": observation, "duration_ms": _elapsed_ms(started_at)})
         return observation
     except Exception as error:
         observation = f"工具调用错误: {str(error)}"
-        await emit("tool_error", {"error": observation})
+        await emit("tool_error", {"error": observation, "duration_ms": _elapsed_ms(started_at)})
         return observation
 
     observation = f"工具输出: {tool_result}"
     await emit("tool_call", {"tool_name": tool_name, "tool_input": tool_input})
-    await emit("tool_output", {"output": observation})
+    await emit("tool_output", {"output": observation, "duration_ms": _elapsed_ms(started_at)})
     return observation
+
+
+def _elapsed_ms(started_at: float) -> float:
+    return round((time.perf_counter() - started_at) * 1000, 3)
 
 async def run_agent(
         task: str,
@@ -325,11 +342,16 @@ async def run_agent(
     if budget is None:
         budget = StepBudget(session_id, max_steps)
 
+    current_step: int | None = None
+
     async def emit(event_type, data):
+        log_data = {key: value for key, value in data.items()
+                    if key not in {"timestamp", "event", "session_id", "step"}}
+        log_event(event_type, session_id, current_step, **log_data)
         if on_event:
             await on_event(event_type, data)
 
-    history_manager = HistoryManager(budget, task, emit, llm_call)
+    history_manager = HistoryManager(budget, task, emit, llm_call, session_id)
     # 异步加载历史
     history = await history_manager.load()
 
@@ -340,16 +362,20 @@ async def run_agent(
 
     try:
         for step in range(1, max_steps + 1):
+            current_step = step
+            history_manager.current_step = current_step
             _consume_step(budget)
             await emit("step_start", {"step": step})
 
             try:
                 # 在调用 llm_call 前，确保传入的消息不含 system 消息
                 llm_messages = [m for m in history if m.get("role") != "system"]
-                response_text = await llm_call(llm_messages, None)
+                started_at = time.perf_counter()
+                response_text = await llm_call(llm_messages, None, session_id, current_step)
+                await emit("llm_complete", {"duration_ms": _elapsed_ms(started_at)})
             except Exception as error:
                 await emit("llm_error", {"error": str(error)})
-                history = await history_manager.append_many_and_save(
+                history = await history_manager.append_many_and_save(  # type: ignore
                     history,
                     [{"role": "user", "content": f"LLM错误: {str(error)}"},
                     {"role": "user", "content": "continue the task"}]
@@ -359,23 +385,23 @@ async def run_agent(
             history = await history_manager.append_and_save(history, "assistant", response_text)
 
             try:
-                result = parse_response(response_text)
-            except Exception as e:
-                await emit("parse_error", {"error": str(e)})
-                history = await history_manager.append_and_save(
+                llm_result = parse_response(response_text)
+            except Exception as error:
+                await emit("parse_error", {"error": str(error)})
+                history = await history_manager.append_and_save(  # type: ignore
                     history,
                     "user",
-                    f"解析错误：{str(e)}。请严格按照格式输出。",
+                    f"解析错误：{str(error)}。请严格按照格式输出。",
                 )
                 continue
 
-            if result.thought:
-                await emit("thought", {"thought": result.thought})
-            if result.final_answer:
-                await emit("final_answer", {"answer": result.final_answer})
-                return result.final_answer
+            if llm_result.thought:
+                await emit("thought", {"thought": llm_result.thought})
+            if llm_result.final_answer:
+                await emit("final_answer", {"answer": llm_result.final_answer})
+                return llm_result.final_answer
 
-            observation = await _execute_action(result, tool_executor, emit)
+            observation = await _execute_action(llm_result, tool_executor, emit)
             history = await history_manager.append_and_save(history, "user", observation) # type: ignore
 
         raise MaxStepsExceeded(
@@ -394,5 +420,25 @@ if __name__ == "__main__":
     cli.add_argument("--session-id", required=True, help="Redis 中的会话标识")
     cli.add_argument("--max-steps", type=int, default=MAX_STEPS, help="最大执行步数")
     args = cli.parse_args()
-    run = asyncio.run(run_agent(args.task, args.session_id, max_steps=args.max_steps))
-    print(run)
+
+    try:
+        result = asyncio.run(
+            run_agent(args.task, args.session_id, max_steps=args.max_steps)
+        )
+        # 使用结构化日志记录最终结果
+        log_event(
+            "agent_result",
+            session_id=args.session_id,
+            step=None,
+            result=result,
+            task=args.task,
+        )
+    except Exception as e:
+        log_event(
+            "agent_error",
+            session_id=args.session_id,
+            step=None,
+            error=str(e),
+            task=args.task,
+        )
+        raise

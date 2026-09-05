@@ -11,7 +11,7 @@ from logger import log_event
 _compressing: set[int] = set()
 
 # LLM 调用类型别名
-LLMCallable = Callable[[list[dict[str, str]], Optional[str]], Awaitable[str]]
+LLMCallable = Callable[[list[dict[str, str]], Optional[str], str, int | None], Awaitable[str]]
 
 def estimate_tokens(messages: list[dict]) -> int:
     """粗略估算消息列表的 token 数：按字符数除以 4 估算。"""
@@ -27,6 +27,8 @@ async def compress_conversation(
         system_msg: str,
         initial_task: str,
         keep_recent: int = config.context_keep_recent_messages,
+        session_id: str = "",
+        step: int | None = None,
 ) -> list[dict]:
     """压缩对话历史，生成摘要并保留最近的消息。
     参数：
@@ -95,12 +97,12 @@ async def compress_conversation(
         summary_skill_prompt = "你是助手，需要根据用户目标、已读文件、已写文件和对话历史，生成一个结构化的摘要。"
         summary_messages = [{"role": "user", "content": summary_prompt}]
         try:
-            summary = await llm_call(summary_messages, summary_skill_prompt)
+            summary = await llm_call(summary_messages, summary_skill_prompt, session_id, step)
             # 截断摘要
             summary = summary[:2000]
-        except Exception as e:
+        except Exception as error:
             # 摘要失败，记录日志并降级返回原消息
-            log_event("context_compression_error", session_id="", step=None, error=str(e))
+            log_event("context_compression_error", session_id="", step=None, error=str(error))
             return messages
 
         # 组织新消息列表
@@ -115,6 +117,7 @@ async def compress_conversation(
         new_messages.append({"role": "assistant", "content": f"Summary of earlier conversation:\n{summary}"})
         new_messages.extend(recent_messages)
         return new_messages
+
     finally:
         _compressing.discard(key)
 
