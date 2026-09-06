@@ -1,6 +1,6 @@
-from pathlib import Path
 import asyncio
 import inspect
+from pathlib import Path
 
 import pytest
 

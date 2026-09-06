@@ -1,7 +1,8 @@
 # context.py
 """上下文压缩工具：估算 token、判断是否需要压缩、执行压缩。"""
 
-from typing import Callable, Awaitable, Optional
+from collections.abc import Awaitable, Callable
+
 from config import config
 from logger import log_event
 
@@ -11,7 +12,7 @@ from logger import log_event
 _compressing: set[int] = set()
 
 # LLM 调用类型别名
-LLMCallable = Callable[[list[dict[str, str]], Optional[str], str, int | None], Awaitable[str]]
+LLMCallable = Callable[[list[dict[str, str]], str | None, str, int | None], Awaitable[str]]
 
 def estimate_tokens(messages: list[dict]) -> int:
     """粗略估算消息列表的 token 数：按字符数除以 4 估算。"""

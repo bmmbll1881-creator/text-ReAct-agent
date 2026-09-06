@@ -1,0 +1,51 @@
+{
+  "summary": {
+    "total": 5,
+    "passed": 5,
+    "failed": 0,
+    "pass_rate": 1.0,
+    "fail_under": 0.8
+  },
+  "results": [
+    {
+      "name": "read_file",
+      "status": "passed",
+      "passed": true,
+      "output": "world",
+      "error": null,
+      "duration_ms": 3.211
+    },
+    {
+      "name": "write_file",
+      "status": "passed",
+      "passed": true,
+      "output": "hello note.txt",
+      "error": null,
+      "duration_ms": 0.913
+    },
+    {
+      "name": "append_file",
+      "status": "passed",
+      "passed": true,
+      "output": "hello world note.txt",
+      "error": null,
+      "duration_ms": 2.383
+    },
+    {
+      "name": "read_missing",
+      "status": "passed",
+      "passed": true,
+      "output": "文件不存在",
+      "error": null,
+      "duration_ms": 0.591
+    },
+    {
+      "name": "combo",
+      "status": "passed",
+      "passed": true,
+      "output": "42 42 result.txt",
+      "error": null,
+      "duration_ms": 2.514
+    }
+  ]
+}

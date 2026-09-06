@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 # 加载 .env 文件中的环境变量
@@ -74,7 +76,7 @@ def _float_env(name: str, default: float, *, positive: bool = False) -> float:
 
 
 def _bool_env(name: str, default: bool) -> bool:
-    """Read a boolean environment variable using explicit true/false values."""
+    """读取布尔环境变量 / Read a boolean environment variable."""
     raw = os.getenv(name)
     if raw is None or not raw.strip():
         return default
@@ -111,7 +113,7 @@ def _suffixes() -> frozenset[str]:
     """
     raw = os.getenv(
         "ALLOWED_SUFFIXES",
-        ".txt,.md,.json,.yml,.yaml,.env.example",
+        ".txt,.md,.py,.json,.yml,.yaml,.env.example",
     )
     # 分割字符串，去除空格，过滤空项，转为不可变集合
     values = frozenset(item.strip() for item in raw.split(",") if item.strip())
@@ -143,16 +145,16 @@ class Config:
     max_read_chars: int  # 读取文件最大字符数
     max_write_chars: int  # 写入文件最大字符数
     allowed_suffixes: frozenset[str]  # 允许的文件后缀集合
-    max_concurrent_runs: int  # 最大并发运行数
-    max_queue_size: int  # 最大队列大小
-    emit_thought: bool  # 是否发送推理内容
+    max_concurrent_runs: int  # 最大并发运行数 / Maximum concurrent runs
+    max_queue_size: int  # 最大队列大小 / Maximum event queue size
+    emit_thought: bool  # 是否发送推理内容 / Whether to emit thoughts
     max_task_length: int
     max_session_id_length: int
     sse_keepalive_seconds: float
     event_queue_put_timeout: float
 
     @classmethod
-    def from_env(cls) -> "Config":
+    def from_env(cls) -> Config:
         """从环境变量创建 Config 实例。
         返回：
             包含所有配置的 Config 对象
@@ -181,7 +183,7 @@ class Config:
                 "CONTEXT_KEEP_RECENT_MESSAGES", 4, minimum=0
             ),
             # 读取文件最大字符数，默认 100000
-            max_read_chars=_int_env("MAX_READ_CHARS", 20_000, positive=True),
+            max_read_chars=_int_env("MAX_READ_CHARS", 100_000, positive=True),
             # 写入文件最大字符数，默认 100000
             max_write_chars=_int_env("MAX_WRITE_CHARS", 100_000, positive=True),
             # 允许的文件后缀
@@ -192,13 +194,13 @@ class Config:
             emit_thought=_bool_env("EMIT_THOUGHT", True),
             # 最大队列大小，默认 100
             max_queue_size=_int_env("MAX_QUEUE_SIZE", 100, positive=True),
-            # API 任务参数最大字符数，默认 10000
+            # API 任务参数最大字符数，默认 10000 / Maximum API task length, default 10000
             max_task_length=_int_env("MAX_TASK_LENGTH", 10_000, positive=True),
-            # API 会话 ID 最大字符数，默认 128
+            # API 会话 ID 最大字符数，默认 128 / Maximum session ID length, default 128
             max_session_id_length=_int_env("MAX_SESSION_ID_LENGTH", 128, positive=True),
-            # SSE 保活事件发送间隔（秒），默认 15 秒
+            # SSE 保活事件发送间隔（秒），默认 15 秒 / SSE keep-alive interval, default 15 seconds
             sse_keepalive_seconds=_float_env("SSE_KEEPALIVE_SECONDS", 15.0, positive=True),
-            # 事件写入队列超时（秒），默认 5 秒
+            # 事件写入队列超时（秒），默认 5 秒 / Event queue put timeout, default 5 seconds
             event_queue_put_timeout=_float_env("EVENT_QUEUE_PUT_TIMEOUT", 5.0, positive=True),
         )
 
@@ -234,7 +236,7 @@ ALLOWED_SUFFIXES = config.allowed_suffixes  # 允许的文件后缀
 MAX_CONCURRENT_RUNS = config.max_concurrent_runs  # 最大并发运行数
 EMIT_THOUGHT = config.emit_thought  # 是否发送推理内容
 MAX_QUEUE_SIZE = config.max_queue_size # 最大队列数
-MAX_TASK_LENGTH = config.max_task_length  # API 任务参数最大字符数
-MAX_SESSION_ID_LENGTH = config.max_session_id_length  # API 会话 ID 最大字符数
-SSE_KEEPALIVE_SECONDS = config.sse_keepalive_seconds  # SSE 保活事件间隔
-EVENT_QUEUE_PUT_TIMEOUT = config.event_queue_put_timeout  # 事件写入队列超时
+MAX_TASK_LENGTH = config.max_task_length  # API 任务参数最大字符数 / Maximum API task length
+MAX_SESSION_ID_LENGTH = config.max_session_id_length  # API 会话 ID 最大字符数 / Maximum session ID length
+SSE_KEEPALIVE_SECONDS = config.sse_keepalive_seconds  # SSE 保活事件间隔 / SSE keep-alive interval
+EVENT_QUEUE_PUT_TIMEOUT = config.event_queue_put_timeout  # 事件写入队列超时 / Event queue put timeout

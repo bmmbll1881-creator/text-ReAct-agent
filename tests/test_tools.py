@@ -18,7 +18,7 @@ def test_writes_reads_and_appends_in_workspace(workspace):
     assert (workspace / "nested" / "note.txt").exists()
 
 
-@pytest.mark.parametrize("path", ["../outside.txt", "C:/outside.txt", "script.py"])
+@pytest.mark.parametrize("path", ["../outside.txt", "C:/outside.txt", "program.exe"])
 def test_rejects_unsafe_or_unsupported_path(workspace, path):
     with pytest.raises(ValueError):
         execute_tool_from_dict("write_file", {"path": path, "content": "no"})

@@ -1,5 +1,7 @@
 import pytest
+
 from context import compress_conversation, should_compress
+
 
 def messages(n=8): return [{"role": "user", "content": "x" * 1000} for _ in range(n)]
 

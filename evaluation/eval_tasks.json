@@ -1,0 +1,7 @@
+[
+  {"name": "read_file", "prompt": "读取 hello.txt", "setup": [{"file": "hello.txt", "content": "world"}], "expected": {"any": ["world"]}},
+  {"name": "write_file", "prompt": "创建 note.txt 并写入 hello", "setup": [], "expected": {"all": ["hello"]}},
+  {"name": "append_file", "prompt": "追加内容 world 到 note.txt", "setup": [{"file": "note.txt", "content": "hello"}], "expected": {"all": ["hello", "world"]}},
+  {"name": "read_missing", "prompt": "读取 missing.txt", "setup": [], "expected": {"any": ["不存在", "未找到", "NotFound", "无法读取"]}},
+  {"name": "combo", "prompt": "读 data.txt 并写入 result.txt", "setup": [{"file": "data.txt", "content": "42"}], "expected": {"all": ["42", "result.txt"]}}
+]

@@ -1,7 +1,7 @@
 # logger.py 日志
 import hashlib
-from datetime import datetime, timezone
 import json
+from datetime import UTC, datetime
 
 # 配置开关：默认关闭敏感信息调试模式
 SENSITIVE_DEBUG = False
@@ -59,7 +59,7 @@ def log_event(event_type: str, session_id: str, step: str | None = None, **extra
         **extra: 额外键值对，将经过敏感信息脱敏后包含在日志中
     """
     log_entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "event": event_type,
         "session_id": session_id,
         "step": step,

@@ -1,9 +1,13 @@
 import asyncio
+import time
+
 import httpx
 import pytest
+
 import agent
 from agent import MaxStepsExceeded, call_llm, run_agent
 from budget import BudgetExceeded
+
 
 class FakeBudget:
     def __init__(self, limit=10):
@@ -50,7 +54,7 @@ async def test_tool_timeout_is_reported(monkeypatch):
     replies = iter(['Action: read_file\nAction Input: {"path":"x.txt"}', "Final Answer: timed out"])
     async def llm(_, __=None, ___="", ____=None): return next(replies)
     def slow(*_):
-        import time; time.sleep(.1)
+        time.sleep(.1)
     assert await run_agent("task", "s", llm_call=llm, tool_executor=slow, budget=FakeBudget()) == "timed out"
 
 @pytest.mark.asyncio

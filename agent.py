@@ -3,23 +3,33 @@ import asyncio
 import json
 import os
 import time
-from typing import Any, Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 import httpx
 from pydantic import BaseModel
-from context import should_compress, compress_conversation
+
 from budget import BudgetExceeded, SessionBusyError, StepBudget
-from config import LLM_TIMEOUT, MAX_STEPS, TOOL_TIMEOUT, CONTEXT_TOKEN_LIMIT, CONTEXT_KEEP_RECENT_MESSAGES, EMIT_THOUGHT
+from config import (
+    CONTEXT_KEEP_RECENT_MESSAGES,
+    CONTEXT_TOKEN_LIMIT,
+    EMIT_THOUGHT,
+    LLM_TIMEOUT,
+    MAX_STEPS,
+    TOOL_TIMEOUT,
+)
+from context import compress_conversation, should_compress
 from logger import log_event
 from parser import parse_response
 from prompts import SYSTEM_PROMPT
 from tools import TOOL_REGISTRY, execute_tool
 
 EventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
-LLMCallable = Callable[[list[dict[str, str]], Optional[str], str, int | None], Awaitable[str]]
+LLMCallable = Callable[[list[dict[str, str]], str | None, str, int | None], Awaitable[str]]
 ToolExecutor = Callable[[str, Any], str]  # 工具执行函数，接收工具名和已验证的模型实例
 
 # 模块级异步HTTP客户端，随应用生命周期复用连接池
-_client: Optional[httpx.AsyncClient] = None
+_client: httpx.AsyncClient | None = None
 
 class MaxStepsExceeded(Exception):
     """步骤超限异常。"""
@@ -41,7 +51,7 @@ async def _request_llm(client, url: str, headers: dict[str, str], data: dict[str
 def _is_retryable_status(status: int) -> bool:
     return status == 429 or 500 <= status < 600
 
-def _build_full_messages(messages: list[dict], skill_prompt: Optional[str]) -> list[dict]:
+def _build_full_messages(messages: list[dict], skill_prompt: str | None) -> list[dict]:
     """构建完整的消息列表，包含系统提示"""
     full_system_prompt = f"{skill_prompt}\n{SYSTEM_PROMPT}" if skill_prompt else SYSTEM_PROMPT
     full_messages = [{"role": "system", "content": full_system_prompt}]
@@ -81,7 +91,7 @@ def _extract_content(response: httpx.Response, session_id: str, step: int | None
 
 
 async def call_llm(messages: list[dict],
-                   skill_prompt: Optional[str] = None,
+                   skill_prompt: str | None = None,
                    session_id: str = "",
                    step: int | None = None
     ) -> str:
@@ -300,7 +310,7 @@ async def _execute_action(
     try:
         validated_input = _validate_tool_input(tool_meta["model"], tool_input)
     except Exception as error:
-        observation = f"输入验证错误: {str(error)}"
+        observation = f"输入验证错误: {error!s}"
         await emit("tool_error", {"error": observation, "duration_ms": _elapsed_ms(started_at)})
         return observation
 
@@ -309,12 +319,12 @@ async def _execute_action(
             asyncio.to_thread(tool_executor, tool_name, validated_input),
             TOOL_TIMEOUT,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         observation = f"工具调用超时: 工具 {tool_name} 超时"
         await emit("tool_error", {"error": observation, "duration_ms": _elapsed_ms(started_at)})
         return observation
     except Exception as error:
-        observation = f"工具调用错误: {str(error)}"
+        observation = f"工具调用错误: {error!s}"
         await emit("tool_error", {"error": observation, "duration_ms": _elapsed_ms(started_at)})
         return observation
 
@@ -377,7 +387,7 @@ async def run_agent(
                 await emit("llm_error", {"error": str(error)})
                 history = await history_manager.append_many_and_save(  # type: ignore
                     history,
-                    [{"role": "user", "content": f"LLM错误: {str(error)}"},
+                    [{"role": "user", "content": f"LLM错误: {error!s}"},
                     {"role": "user", "content": "continue the task"}]
                 )
                 continue
@@ -391,7 +401,7 @@ async def run_agent(
                 history = await history_manager.append_and_save(  # type: ignore
                     history,
                     "user",
-                    f"解析错误：{str(error)}。请严格按照格式输出。",
+                    f"解析错误：{error!s}。请严格按照格式输出。",
                 )
                 continue
 
