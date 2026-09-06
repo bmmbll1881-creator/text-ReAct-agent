@@ -37,8 +37,8 @@ def _int_env(name: str, default: int, *, minimum: int | None = None, positive: b
     try:
         # 如果环境变量为空或未设置，使用默认值
         value = default if raw is None or not raw.strip() else int(raw)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} 必须是整数") from exc
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} 必须是整数") from error
 
     # 验证正数要求
     if positive and value <= 0:
@@ -64,13 +64,26 @@ def _float_env(name: str, default: float, *, positive: bool = False) -> float:
     try:
         # 如果环境变量为空或未设置，使用默认值
         value = default if raw is None or not raw.strip() else float(raw)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} 必须是数字") from exc
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} 必须是数字") from error
 
     # 验证正数要求
     if positive and value <= 0:
         raise ValueError(f"{name} 必须大于 0")
     return value
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    """Read a boolean environment variable using explicit true/false values."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
 
 
 def _workspace() -> Path:
@@ -130,6 +143,13 @@ class Config:
     max_read_chars: int  # 读取文件最大字符数
     max_write_chars: int  # 写入文件最大字符数
     allowed_suffixes: frozenset[str]  # 允许的文件后缀集合
+    max_concurrent_runs: int  # 最大并发运行数
+    max_queue_size: int  # 最大队列大小
+    emit_thought: bool  # 是否发送推理内容
+    max_task_length: int
+    max_session_id_length: int
+    sse_keepalive_seconds: float
+    event_queue_put_timeout: float
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -166,6 +186,20 @@ class Config:
             max_write_chars=_int_env("MAX_WRITE_CHARS", 100_000, positive=True),
             # 允许的文件后缀
             allowed_suffixes=_suffixes(),
+            # 最大并发运行数，默认 10
+            max_concurrent_runs=_int_env("MAX_CONCURRENT_RUNS", 10, positive=True),
+            # 是否发送推理内容，默认为 True
+            emit_thought=_bool_env("EMIT_THOUGHT", True),
+            # 最大队列大小，默认 100
+            max_queue_size=_int_env("MAX_QUEUE_SIZE", 100, positive=True),
+            # API 任务参数最大字符数，默认 10000
+            max_task_length=_int_env("MAX_TASK_LENGTH", 10_000, positive=True),
+            # API 会话 ID 最大字符数，默认 128
+            max_session_id_length=_int_env("MAX_SESSION_ID_LENGTH", 128, positive=True),
+            # SSE 保活事件发送间隔（秒），默认 15 秒
+            sse_keepalive_seconds=_float_env("SSE_KEEPALIVE_SECONDS", 15.0, positive=True),
+            # 事件写入队列超时（秒），默认 5 秒
+            event_queue_put_timeout=_float_env("EVENT_QUEUE_PUT_TIMEOUT", 5.0, positive=True),
         )
 
 
@@ -197,3 +231,10 @@ CONTEXT_KEEP_RECENT_MESSAGES = config.context_keep_recent_messages  # 保留消�
 MAX_READ_CHARS = config.max_read_chars  # 读取最大字符数
 MAX_WRITE_CHARS = config.max_write_chars  # 写入最大字符数
 ALLOWED_SUFFIXES = config.allowed_suffixes  # 允许的文件后缀
+MAX_CONCURRENT_RUNS = config.max_concurrent_runs  # 最大并发运行数
+EMIT_THOUGHT = config.emit_thought  # 是否发送推理内容
+MAX_QUEUE_SIZE = config.max_queue_size # 最大队列数
+MAX_TASK_LENGTH = config.max_task_length  # API 任务参数最大字符数
+MAX_SESSION_ID_LENGTH = config.max_session_id_length  # API 会话 ID 最大字符数
+SSE_KEEPALIVE_SECONDS = config.sse_keepalive_seconds  # SSE 保活事件间隔
+EVENT_QUEUE_PUT_TIMEOUT = config.event_queue_put_timeout  # 事件写入队列超时

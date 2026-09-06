@@ -19,9 +19,16 @@ def _redact_sensitive(key, value):
     """
     key_lower = key.lower()
 
-    # 屏蔽 敏感字段
+    # 屏蔽敏感字段
     if any(marker in key_lower for marker in ("api_key", "apikey", "token", "secret", "password", "authorization")):
         return '[REDACTED]'
+
+    # 对嵌套结构（例如请求头）进行屏蔽
+    if isinstance(value, dict):
+        return {k: _redact_sensitive(str(k), v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        redacted = [_redact_sensitive(key, item) for item in value]
+        return type(value)(redacted)
 
     # 处理文件内容
     if 'content' in key_lower or 'file' in key_lower:

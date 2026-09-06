@@ -8,7 +8,7 @@ import httpx
 from pydantic import BaseModel
 from context import should_compress, compress_conversation
 from budget import BudgetExceeded, SessionBusyError, StepBudget
-from config import LLM_TIMEOUT, MAX_STEPS, TOOL_TIMEOUT, CONTEXT_TOKEN_LIMIT, CONTEXT_KEEP_RECENT_MESSAGES
+from config import LLM_TIMEOUT, MAX_STEPS, TOOL_TIMEOUT, CONTEXT_TOKEN_LIMIT, CONTEXT_KEEP_RECENT_MESSAGES, EMIT_THOUGHT
 from logger import log_event
 from parser import parse_response
 from prompts import SYSTEM_PROMPT
@@ -395,7 +395,7 @@ async def run_agent(
                 )
                 continue
 
-            if llm_result.thought:
+            if EMIT_THOUGHT and llm_result.thought:
                 await emit("thought", {"thought": llm_result.thought})
             if llm_result.final_answer:
                 await emit("final_answer", {"answer": llm_result.final_answer})
