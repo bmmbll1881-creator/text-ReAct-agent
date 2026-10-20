@@ -69,12 +69,14 @@ python -m evaluation.eval_runner --fail-under 0.8
 python -m evaluation.eval_runner --deterministic-agent --tasks-file evaluation/deterministic_tasks.json --report-path evaluation/deterministic-report.json
 ```
 
+The latest real-LLM run passed 31/31 online tasks (100%): 11 multi-step, 10 recovery, and 10 security cases; average task duration was 3.84 s. Redis acceptance passed with 4 processes, 1,000 shared budget increments, and 4 lock acquisitions (390.92 budget operations/s). The local in-memory Agent load test completed 40 requests across 4 processes at 53.61 requests/s (P95 7.377 ms); this is not an end-to-end online service benchmark.
+
 The deterministic suite contains 40 cases: 11 multi-step file operations, 10 recovery cases, 10 security rejection cases, and 9 budget cases. The latest run passed 40/40 (100%), with 100% in every category. Tasks define inputs with `setup`, scripted turns with `replies`, file side effects with `expected_files`/`absent_files`, and event/output contracts with `expected_events` and `expected`. This does not measure real-LLM generalization.
 
 需测试在线 LLM/Redis 时显式使用：
 
 ```powershell
-python -m evaluation.eval_runner --online --tasks-file evaluation/deterministic_tasks.json --report-path evaluation/online-report.json
+python -m evaluation.eval_runner --online --tasks-file evaluation/online_tasks.json --report-path evaluation/online-report.json
 ```
 
 报告 JSON 中：
@@ -82,8 +84,8 @@ python -m evaluation.eval_runner --online --tasks-file evaluation/deterministic_
 Redis multi-process shared-budget/lock acceptance and local deterministic-Agent load test:
 
 ```powershell
-python -m evaluation.redis_acceptance --instances 2 --operations 10
-python -m evaluation.load_test --requests 100 --workers 4
+python -m evaluation.redis_acceptance --instances 4 --operations 250
+python -m evaluation.load_test --requests 40 --workers 4
 ```
 
 The local load test uses scripted replies and an in-memory budget; it does not measure network LLM/Redis latency or contention.

@@ -115,3 +115,23 @@ async def test_evaluate_accepts_any_expected_error(monkeypatch):
     result = await eval_runner.evaluate([{"name": "failure", "prompt": "p", "setup": [],
                                          "expected_error": True, "expected": {"all": []}}])
     assert result[0]["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_real_llm_evaluation_skips_scripted_event_contract(monkeypatch):
+    async def final_answer_only(prompt, session_id, **kwargs):
+        return "ok"
+
+    monkeypatch.setattr(eval_runner, "run_agent", final_answer_only)
+    result = await eval_runner.evaluate([{
+        "name": "online", "prompt": "p", "setup": [],
+        "expected_events": ["tool_call"], "expected": {"all": ["ok"]},
+    }], real_llm=True)
+    assert result[0]["passed"] is True
+
+
+def test_online_suite_covers_non_budget_scenarios():
+    tasks = json.loads(Path("evaluation/online_tasks.json").read_text(encoding="utf-8"))
+    assert len(tasks) == 31
+    assert all(task["category"] != "budget" for task in tasks)
+    assert all("online_expected" in task for task in tasks if task["category"] == "security")

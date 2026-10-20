@@ -116,6 +116,7 @@ class StepBudget:
         lock = self.redis.redis_client.lock(
             f"react-agent:lock:{self.session_id}",
             timeout=lock_ttl,  # 锁的最长持有时间
+            thread_local=False,
         )
 
         if not lock.acquire(blocking=True, blocking_timeout=blocking_timeout):

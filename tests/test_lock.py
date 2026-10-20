@@ -19,7 +19,8 @@ class FakeRedis:
     def __init__(self, available=True):
         self.lock_instance = FakeLock(available)
 
-    def lock(self, *_args, **_kwargs):
+    def lock(self, *_args, **kwargs):
+        self.lock_kwargs = kwargs
         return self.lock_instance
 
 
@@ -36,6 +37,7 @@ def test_acquire_and_release_lock(monkeypatch):
     budget.release_lock()
 
     assert fake.lock_instance.released is True
+    assert fake.lock_kwargs["thread_local"] is False
     assert budget._lock is None
 
 

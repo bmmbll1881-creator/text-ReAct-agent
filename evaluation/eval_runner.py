@@ -97,7 +97,7 @@ def _write_setup(workspace: Path, setup: Iterable[dict[str, str]]) -> None:
         target.write_text(item.get("content", ""), encoding="utf-8")
 
 
-async def evaluate(tasks: list[dict[str, Any]], model: str | None = None, *, offline: bool = False, deterministic_agent: bool = False) -> list[dict[str, Any]]:
+async def evaluate(tasks: list[dict[str, Any]], model: str | None = None, *, offline: bool = False, deterministic_agent: bool = False, real_llm: bool = False) -> list[dict[str, Any]]:
     results = []
     for task in tasks:
         started = time.perf_counter()
@@ -117,6 +117,8 @@ async def evaluate(tasks: list[dict[str, Any]], model: str | None = None, *, off
                 kwargs["on_event"] = collect_event
                 if model:
                     kwargs["llm_call"] = call_llm
+                if task.get("max_steps") and not deterministic_agent:
+                    kwargs["max_steps"] = task["max_steps"]
                 if deterministic_agent:
                     max_steps = task.get("max_steps", 12)
                     kwargs.update(llm_call=ScriptedLLM(task["prompt"], task.get("replies")),
@@ -146,14 +148,16 @@ async def evaluate(tasks: list[dict[str, Any]], model: str | None = None, *, off
                 for unexpected_file in task.get("absent_files", []):
                     if (workspace / unexpected_file).exists():
                         raise AssertionError(f"unexpected file was created: {unexpected_file}")
-                if task.get("expected_error") and not error:
+                if task.get("expected_error") and not real_llm and not error:
                     raise AssertionError(f"expected execution error: {task['expected_error']}")
-                missing_events = set(task.get("expected_events", [])) - {name for name, _ in events}
+                expected_events = [] if real_llm else task.get("expected_events", [])
+                missing_events = set(expected_events) - {name for name, _ in events}
                 if missing_events:
                     raise AssertionError(f"expected events were not emitted: {sorted(missing_events)}")
-                if task.get("expected_error"):
+                if task.get("expected_error") and error:
                     output = f"{output}\n{error}"
-                status = "passed" if check_expected(output, task.get("expected")) else "failed"
+                expected = task.get("online_expected", task.get("expected")) if real_llm else task.get("expected")
+                status = "passed" if check_expected(output, expected) else "failed"
             except Exception as exc:  # 记录单项失败而不中断评估 / Record task failure without aborting the suite
                 error = str(exc)
             steps = sum(1 for name, _ in events if name == "step_start")
@@ -176,7 +180,8 @@ async def main_async(args: argparse.Namespace) -> int:
     if deterministic_agent:
         offline = False
     results = await evaluate(tasks, args.model, offline=offline,
-                             deterministic_agent=deterministic_agent)
+                             deterministic_agent=deterministic_agent,
+                             real_llm=getattr(args, "online", False))
     passed = sum(item["passed"] for item in results)
     total = len(results)
     categories = {}

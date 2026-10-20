@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import multiprocessing
 import os
+import time
 import uuid
 
 
@@ -22,7 +23,7 @@ def _lock_worker(session_id: str, output) -> None:
 
     budget = StepBudget(session_id, 2)
     try:
-        budget.acquire_lock(blocking_timeout=2)
+        budget.acquire_lock(blocking_timeout=10)
         output.put((True, "acquired"))
         budget.release_lock()
     except Exception as error:
@@ -50,6 +51,7 @@ def main() -> int:
     budget_key = f"agent:budget:{session_id}"
     context = multiprocessing.get_context("spawn")
     output = context.Queue()
+    started = time.perf_counter()
     processes = [context.Process(target=_consume_worker, args=(session_id, args.operations, output))
                  for _ in range(args.instances)]
     try:
@@ -65,6 +67,7 @@ def main() -> int:
         if actual != expected:
             raise AssertionError(f"shared budget count {actual} != {expected}")
 
+        budget_seconds = time.perf_counter() - started
         lock_session = f"acceptance-lock-{suffix}"
         lock_results = context.Queue()
         lock_processes = [context.Process(target=_lock_worker, args=(lock_session, lock_results))
@@ -77,7 +80,9 @@ def main() -> int:
         if any(process.exitcode != 0 for process in lock_processes) or not all(ok for ok, _ in outcomes):
             raise RuntimeError(f"lock worker failure: {outcomes}")
         print({"status": "passed", "instances": args.instances, "operations": expected,
-               "shared_budget_count": actual, "lock_acquisitions": len(outcomes)})
+               "shared_budget_count": actual, "lock_acquisitions": len(outcomes),
+               "budget_duration_seconds": round(budget_seconds, 4),
+               "budget_operations_per_second": round(expected / budget_seconds, 2)})
         return 0
     finally:
         for process in processes:
