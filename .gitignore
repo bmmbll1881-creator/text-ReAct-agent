@@ -31,3 +31,4 @@ evaluation/eval_report.json
 .vscode/
 .DS_Store
 Thumbs.db
+evaluation/*report*.json

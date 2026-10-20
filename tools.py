@@ -2,7 +2,7 @@
 
 import os
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,7 +27,8 @@ class WriteFileInput(BaseModel):
 def safe_path(relative_path: str) -> Path:
     """解析相对路径，并拒绝工作目录外的访问。"""
     norm_path = os.path.normpath(relative_path)
-    if os.path.isabs(norm_path):
+    windows_path = PureWindowsPath(relative_path)
+    if os.path.isabs(norm_path) or windows_path.is_absolute() or windows_path.drive:
         raise ValueError("不能使用绝对路径")
 
     path = (WORK_SPACE / norm_path).resolve()

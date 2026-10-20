@@ -17,6 +17,8 @@ from typing import Any
 import tools
 from agent import call_llm
 from agent import run_agent as _run_agent
+from demo.memory_budget import MemoryBudget
+from demo.scripted_llm import ScriptedLLM
 
 run_agent = _run_agent
 
@@ -95,29 +97,67 @@ def _write_setup(workspace: Path, setup: Iterable[dict[str, str]]) -> None:
         target.write_text(item.get("content", ""), encoding="utf-8")
 
 
-async def evaluate(tasks: list[dict[str, Any]], model: str | None = None, *, offline: bool = False) -> list[dict[str, Any]]:
+async def evaluate(tasks: list[dict[str, Any]], model: str | None = None, *, offline: bool = False, deterministic_agent: bool = False) -> list[dict[str, Any]]:
     results = []
     for task in tasks:
         started = time.perf_counter()
         output = ""
         status = "failed"
         error = None
+        events: list[tuple[str, dict[str, Any]]] = []
         with tempfile.TemporaryDirectory(prefix="agent-eval-") as raw:
             workspace = Path(raw)
             _write_setup(workspace, task.get("setup", []))
             session_id = f"eval-{task['name']}-{uuid.uuid4().hex}"
             try:
                 kwargs = {}
+                async def collect_event(name: str, payload: dict[str, Any], event_log=events) -> None:
+                    event_log.append((name, payload))
+
+                kwargs["on_event"] = collect_event
                 if model:
                     kwargs["llm_call"] = call_llm
+                if deterministic_agent:
+                    max_steps = task.get("max_steps", 12)
+                    kwargs.update(llm_call=ScriptedLLM(task["prompt"], task.get("replies")),
+                                  budget=MemoryBudget(session_id, max_steps), max_steps=max_steps)
                 with isolated_workspace(workspace):
                     runner = offline_run_agent if offline else run_agent
-                    result = await runner(task["prompt"], session_id, **kwargs)
-                output = str(result)
+                    try:
+                        result = await runner(task["prompt"], session_id, **kwargs)
+                        output = str(result)
+                    except Exception as exc:
+                        if not task.get("expected_error") or (isinstance(task["expected_error"], str) and task["expected_error"].lower() not in str(exc).lower()):
+                            raise
+                        error = str(exc)
+                event_output = "\n".join(
+                    f"{name}: {json.dumps(payload, ensure_ascii=False, default=str)}"
+                    for name, payload in events
+                )
+                file_output = "\n".join(
+                    f"{path.relative_to(workspace).as_posix()}: {path.read_text(encoding='utf-8')}"
+                    for path in sorted(workspace.rglob("*"))
+                    if path.is_file()
+                )
+                output = "\n".join(part for part in (output, event_output, file_output) if part)
+                for expected_file in task.get("expected_files", []):
+                    if not (workspace / expected_file).is_file():
+                        raise AssertionError(f"expected output file was not created: {expected_file}")
+                for unexpected_file in task.get("absent_files", []):
+                    if (workspace / unexpected_file).exists():
+                        raise AssertionError(f"unexpected file was created: {unexpected_file}")
+                if task.get("expected_error") and not error:
+                    raise AssertionError(f"expected execution error: {task['expected_error']}")
+                missing_events = set(task.get("expected_events", [])) - {name for name, _ in events}
+                if missing_events:
+                    raise AssertionError(f"expected events were not emitted: {sorted(missing_events)}")
+                if task.get("expected_error"):
+                    output = f"{output}\n{error}"
                 status = "passed" if check_expected(output, task.get("expected")) else "failed"
             except Exception as exc:  # 记录单项失败而不中断评估 / Record task failure without aborting the suite
                 error = str(exc)
-            results.append({"name": task["name"], "status": status, "passed": status == "passed", "output": output, "error": error, "duration_ms": round((time.perf_counter() - started) * 1000, 3)})
+            steps = sum(1 for name, _ in events if name == "step_start")
+            results.append({"name": task["name"], "category": task.get("category", "uncategorized"), "status": status, "passed": status == "passed", "steps": steps, "output": output, "error": error, "duration_ms": round((time.perf_counter() - started) * 1000, 3)})
     return results
 
 
@@ -126,14 +166,27 @@ async def main_async(args: argparse.Namespace) -> int:
     selected = set(filter(None, (args.tasks or "").split(",")))
     if selected:
         tasks = [task for task in tasks if task["name"] in selected]
+        if not tasks:
+            raise ValueError(f"no evaluation tasks matched: {sorted(selected)}")
     # Tests and embeddings can inject ``run_agent``; CLI defaults to deterministic offline mode.
     offline = getattr(args, "offline", None)
     if offline is None:
         offline = not getattr(args, "online", False) and run_agent is _run_agent
-    results = await evaluate(tasks, args.model, offline=offline)
+    deterministic_agent = getattr(args, "deterministic_agent", False)
+    if deterministic_agent:
+        offline = False
+    results = await evaluate(tasks, args.model, offline=offline,
+                             deterministic_agent=deterministic_agent)
     passed = sum(item["passed"] for item in results)
     total = len(results)
-    report = {"summary": {"total": total, "passed": passed, "failed": total - passed, "pass_rate": passed / total if total else 0.0, "fail_under": args.fail_under}, "results": results}
+    categories = {}
+    for result in results:
+        group = categories.setdefault(result["category"], {"total": 0, "passed": 0, "pass_rate": 0.0})
+        group["total"] += 1
+        group["passed"] += int(result["passed"])
+    for group in categories.values():
+        group["pass_rate"] = group["passed"] / group["total"] if group["total"] else 0.0
+    report = {"summary": {"total": total, "passed": passed, "failed": total - passed, "pass_rate": passed / total if total else 0.0, "average_steps": sum(item["steps"] for item in results) / total if total else 0.0, "average_duration_ms": sum(item["duration_ms"] for item in results) / total if total else 0.0, "categories": categories, "fail_under": args.fail_under}, "results": results}
     output = json.dumps(report, ensure_ascii=False, indent=2)
     if args.report_path:
         path = Path(args.report_path); path.parent.mkdir(parents=True, exist_ok=True); path.write_text(output + "\n", encoding="utf-8")
@@ -150,6 +203,8 @@ def main() -> None:
     parser.add_argument("--fail-under", type=float, default=0.8)
     parser.add_argument("--model")
     parser.add_argument("--online", action="store_true", help="use real LLM/Redis agent")
+    parser.add_argument("--deterministic-agent", action="store_true",
+                        help="run real Agent loop with ScriptedLLM and in-memory budget")
     raise SystemExit(asyncio.run(main_async(parser.parse_args())))
 
 
