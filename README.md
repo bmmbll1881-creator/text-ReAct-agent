@@ -7,23 +7,30 @@
 ```text
 .
 ├── agent.py                 # Agent 主循环、LLM 调用、协议解析与事件
-├── tools.py                 # 工作区隔离的文件读写工具
+├── tools.py                 # 工具注册表（本地工具 + MCP 工具契约）
+├── tool_dispatch.py         # 同步/异步工具分派、observation 序列化与状态约束
+├── knowledge_backend.py     # 知识库后端（Mcp / Stub / Null）
+├── mcp_client.py            # RAG MCP stdio 客户端（会话复用）
+├── prompts.py               # 由注册表生成的系统提示词
 ├── parser.py                # ReAct 文本协议解析
 ├── budget.py                # 本地与 Redis 会话预算、历史和锁
-├── api.py                   # FastAPI 与 SSE 接口
+├── api.py                   # FastAPI、SSE 接口与 MCP 生命周期
 ├── config.py                # 环境变量配置
 ├── context.py               # 会话上下文压缩
-├── demo/                    # 离线确定性演示和内存预算
+├── demo/                    # 离线演示、MCP 联调 Demo、内存预算
+├── docs/                    # 方案与阶段汇报
 ├── evaluation/              # 评测器和评测任务
 └── tests/                   # 单元与集成测试
 ```
 
 ## 安装与配置
 
-需要 Python 3.10+。安装项目和测试依赖：
+需要 Python 3.11+（`asyncio.timeout` 等 API）。安装项目和测试依赖：
 
 ```powershell
 pip install -r requirements.txt
+# 或使用 uv（本仓库开发环境即 uv 管理的 venv）
+uv pip install -r requirements.txt
 ```
 
 复制 `.env.example` 为 `.env`，配置 `CHAT_URL`、`DEEPSEEK_API_KEY` 和工作区等参数。在线 API/Agent 模式需要可访问的 Redis 服务；离线 Demo 和确定性评测不需要启动 Redis，也不需要配置或访问外部 LLM。
@@ -182,8 +189,12 @@ The local load test uses scripted replies and an in-memory budget; it does not m
 ## 测试与质量检查
 
 ```powershell
-python -m pytest -q
+python -m pytest -q                      # 单元测试（真集成用例默认跳过）
+$env:RAG_INTEGRATION=1; python -m pytest -q -k real_mcp   # 启动真实 MCP 子进程
 python -m pytest --cov=. --cov-report=term-missing --cov-fail-under=80
 python -m compileall -q .
-ruff check .
+ruff check .                             # 零告警
 ```
+
+真实集成用例需要 `RAG_MCP_*` 指向可用的 RAG 仓库与 `demo/data`，
+并读取共享用例 `demo/cases.json`；缺文件时会 `skip` 而不是失败。

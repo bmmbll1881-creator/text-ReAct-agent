@@ -29,6 +29,9 @@ evaluation/eval_report.json
 # Local source backups created before risky refactors
 .backup/
 
+# 测试与演示的本地临时目录（ACL 可能受限，避免每次 git status 扫描）
+.test-tmp/
+
 # IDE and OS files
 .idea/
 .vscode/

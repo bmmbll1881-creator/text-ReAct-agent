@@ -5,10 +5,11 @@ import asyncio
 import json
 import sys
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import tools
 from agent import run_agent
@@ -42,7 +43,7 @@ class EventLog:
         seq = len(self.entries) + 1
         try:
             self.entries.append({"seq": seq, "event": event, **data})
-        except Exception as exc:  # noqa: BLE001 - observer must be best-effort
+        except Exception as exc:  # observer must be best-effort
             self.entries.append({
                 "seq": seq,
                 "event": "observer_error",
@@ -117,12 +118,12 @@ async def main() -> int:
             with workspace_override(workspace):
                 try:
                     answer = await _run_demo(workspace, events)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     print(f"Agent 执行超时（>{TIMEOUT_SECONDS:.0f}s）。", file=sys.stderr)
                     print("事件列表：")
                     _dump_events(events.entries)
                     return 2
-                except Exception as exc:  # noqa: BLE001 - demo should report, not crash
+                except Exception as exc:  # demo should report, not crash
                     print(f"Agent 执行失败：{exc!r}", file=sys.stderr)
                     print("事件列表：")
                     _dump_events(events.entries)

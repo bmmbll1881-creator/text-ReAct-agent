@@ -1,6 +1,8 @@
 [tool.ruff]
 target-version = "py313"
 line-length = 100
+# 本地运行产物（含 ACL 受限目录），不参与静态检查
+exclude = [".venv", ".backup", ".test-tmp", ".pytest_cache", "workspace"]
 
 [tool.ruff.lint]
 ignore = ["BLE001"]

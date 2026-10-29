@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import Any, Self
 
 from budget import BudgetExceeded
 
@@ -103,7 +103,7 @@ class MemoryBudget:
 
     # --- context manager ------------------------------------------------------
 
-    def __enter__(self) -> "MemoryBudget":
+    def __enter__(self) -> Self:
         self.acquire_lock()
         return self
 

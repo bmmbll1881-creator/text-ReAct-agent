@@ -308,3 +308,43 @@ Agent： pytest -q                     102 passed, 1 skipped
 **统一数据后的一个直接收益**：A 段自检从"抽查 4 条"变成"覆盖全部 7 条用例"，
 其中 `contract_termination` 这类多 chunk 命中会返回 3 行答案——断言改为"预期事实片段包含在答案中 + 引用 ID 全部出现在答案里"，
 既能容忍抽取式噪音，又能抓住"事实错位"和"引用丢失"两类真问题。
+
+### 2026-10-29 · A6 存量告警清理与整理
+
+**静态检查归零**
+
+| 仓库 | 清理前 | 清理后 | 处理方式 |
+|---|---|---|---|
+| RAG | 46 | **0** | `ruff --fix` 自动修 53 项（导入排序、`Dict→dict`、`Optional→| None`、`datetime.UTC` 等），手工修 5 项 |
+| Agent | 6 | **0** | `demo/memory_budget.py` 的 `Self` 注解、`demo/run_demo.py` 的 `collections.abc.Iterator` / `TimeoutError` / 去掉已 ignore 的多余 noqa |
+
+手工修 5 项的判断依据（都不是"加 noqa 了事"）：
+
+- **`B008`（`UploadFile = File(...)`）**：FastAPI 的声明式默认值，属误报。在 `pyproject.toml` 里配
+  `[tool.ruff.lint.flake8-bugbear] extend-immutable-calls = ["fastapi.File", ...]`，从规则层面消除，
+  而不是逐行 noqa。
+- **`BLE001`（3 处 blind except）**：反射重写失败、LLM 调用失败、远端 embedding 失败——异常类型不可穷举，
+  且**必须**降级而不是冒泡。保留捕获范围，逐处加 `# noqa: BLE001` 并写明"必须降级"的理由。
+- **`RUF012`（可变类属性）**：`_STRATEGY_MAPPING` 改注 `ClassVar[dict[...]]`，语义更准确。
+
+**其他整理**
+
+- 两个 `pyproject.toml` 补 ruff 配置：RAG 新增 `target-version = "py311"`、`line-length = 100` 与
+  `exclude`（`.pytest-db-final`、`demo/data` 等本地产物）；Agent 补 `exclude`（`.backup`、`.test-tmp`）。
+  此前每次跑 ruff / `git status` 都会因 ACL 受限目录报 `拒绝访问`，现在消失。
+- `.gitignore` 增补测试产物目录，消除 `git status` 的权限告警噪声。
+- **README 时效性**：
+  - Agent：项目结构补 `tool_dispatch.py`、`knowledge_backend.py`、`mcp_client.py`、`prompts.py`、`docs/`；
+    Python 版本 3.10+ → 3.11+（`asyncio.timeout`）；补 `uv pip install` 与真集成测试命令。
+  - RAG：安装段补 `uv` 方式；测试段写明 132 项、`ruff check .` 零告警、以及 `cases.json` 的事实回溯校验。
+
+**验证**
+
+```
+RAG：  ruff check .           All checks passed
+       pytest -q              132 passed
+       compileall src demo tests / demo.run_demo    ok / 7 条路由符合预期
+Agent：ruff check .           All checks passed
+       pytest -q              102 passed, 1 skipped
+       demo.run_demo / demo.run_integrated_demo    行为不变 / 21/21
+```
