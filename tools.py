@@ -1,9 +1,15 @@
-"""工作目录内受限的文件读写工具。"""
+"""工作目录内受限的文件读写工具。
+
+注册表分两层：
+- ``LOCAL_TOOL_REGISTRY``：本地同步工具，带可执行 ``func``；
+- ``MCP_TOOL_SPECS``：MCP 工具，只有入参模型与描述，执行走 ``tool_dispatch``。
+``TOOL_REGISTRY`` 是两者的合并视图，仅供入参校验与提示词生成使用。
+"""
 
 import os
 from functools import lru_cache
 from pathlib import Path, PureWindowsPath
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -80,7 +86,7 @@ def _write_file(inp: WriteFileInput) -> str:
     return f"已向 {path.relative_to(WORK_SPACE)} 写入 {len(content)} 个字符"
 
 
-TOOL_REGISTRY = {
+LOCAL_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
     "read_file": {
         "model": ReadFileInput,
         "func": _read_file,
@@ -95,23 +101,48 @@ TOOL_REGISTRY = {
     },
 }
 
+#: MCP 工具只描述契约，不在这里执行（异步客户端由 tool_dispatch 负责）。
+MCP_TOOL_SPECS: dict[str, dict[str, Any]] = {}
+
+#: 合并视图：Agent 校验入参、生成提示词时必须看到全部工具。
+TOOL_REGISTRY: dict[str, dict[str, Any]] = {**LOCAL_TOOL_REGISTRY, **MCP_TOOL_SPECS}
+
+
+def available_tools() -> str:
+    """返回逗号分隔的工具名，用于错误提示。"""
+    return ", ".join(TOOL_REGISTRY.keys())
+
 
 def execute_tool(tool_name: str, validated_input: BaseModel) -> str:
-    """按工具名称调用注册工具。"""
-    if tool_name not in TOOL_REGISTRY:
-        available = ", ".join(TOOL_REGISTRY.keys())
-        raise ValueError(f"未知工具：{tool_name}；可用工具：{available}")
-    tool = TOOL_REGISTRY[tool_name]
+    """执行本地同步工具。
+
+    Args:
+        tool_name: 工具名称，必须存在于 ``LOCAL_TOOL_REGISTRY``
+        validated_input: 已通过对应 Pydantic 模型校验的入参
+
+    Returns:
+        工具输出文本
+
+    Raises:
+        ValueError: 工具不存在，或该工具是 MCP 工具（必须走 execute_tool_async）
+        TypeError: 入参模型与注册表声明不一致
+    """
+    tool = LOCAL_TOOL_REGISTRY.get(tool_name)
+    if tool is None:
+        if tool_name in MCP_TOOL_SPECS:
+            raise ValueError(f"{tool_name} 是 MCP 工具，必须通过 execute_tool_async 调用")
+        raise ValueError(f"未知工具：{tool_name}；可用工具：{available_tools()}")
     if not isinstance(validated_input, tool["model"]):
         raise TypeError(f"输入类型错误：{type(validated_input)} 不是 {tool['model']}")
     func = tool["func"]
     return func(validated_input) # type: ignore
 
 def execute_tool_from_dict(tool_name: str, raw: dict) -> str:
+    """按工具名与原始字典校验入参后执行本地工具。"""
     if tool_name not in TOOL_REGISTRY:
-        available = ", ".join(TOOL_REGISTRY.keys())
-        raise ValueError(f"未知工具：{tool_name}；可用工具：{available}")
+        raise ValueError(f"未知工具：{tool_name}；可用工具：{available_tools()}")
     model_cls = TOOL_REGISTRY[tool_name]["model"]
     validated = model_cls.model_validate(raw)   # Pydantic v2
     return execute_tool(tool_name, validated)
+
 

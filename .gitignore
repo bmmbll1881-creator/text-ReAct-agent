@@ -26,6 +26,9 @@ dist/
 workspace/
 evaluation/eval_report.json
 
+# Local source backups created before risky refactors
+.backup/
+
 # IDE and OS files
 .idea/
 .vscode/

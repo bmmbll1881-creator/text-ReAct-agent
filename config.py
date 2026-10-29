@@ -144,6 +144,7 @@ class Config:
     context_keep_recent_messages: int  # 保留的最近消息数量
     max_read_chars: int  # 读取文件最大字符数
     max_write_chars: int  # 写入文件最大字符数
+    max_observation_chars: int  # 单次工具 observation 最大字符数 / Maximum observation length
     allowed_suffixes: frozenset[str]  # 允许的文件后缀集合
     max_concurrent_runs: int  # 最大并发运行数 / Maximum concurrent runs
     max_queue_size: int  # 最大队列大小 / Maximum event queue size
@@ -186,6 +187,8 @@ class Config:
             max_read_chars=_int_env("MAX_READ_CHARS", 100_000, positive=True),
             # 写入文件最大字符数，默认 100000
             max_write_chars=_int_env("MAX_WRITE_CHARS", 100_000, positive=True),
+            # 单次工具 observation 最大字符数，默认 4000（与上下文 token 预算对齐）
+            max_observation_chars=_int_env("MAX_OBSERVATION_CHARS", 4000, positive=True),
             # 允许的文件后缀
             allowed_suffixes=_suffixes(),
             # 最大并发运行数，默认 10
@@ -232,6 +235,7 @@ CONTEXT_TOKEN_LIMIT = config.context_token_limit  # 上下文 token 限制
 CONTEXT_KEEP_RECENT_MESSAGES = config.context_keep_recent_messages  # 保留消息数
 MAX_READ_CHARS = config.max_read_chars  # 读取最大字符数
 MAX_WRITE_CHARS = config.max_write_chars  # 写入最大字符数
+MAX_OBSERVATION_CHARS = config.max_observation_chars  # observation 最大字符数
 ALLOWED_SUFFIXES = config.allowed_suffixes  # 允许的文件后缀
 MAX_CONCURRENT_RUNS = config.max_concurrent_runs  # 最大并发运行数
 EMIT_THOUGHT = config.emit_thought  # 是否发送推理内容

@@ -1,5 +1,6 @@
 """ReAct Agent 的运行入口。"""
 import asyncio
+import inspect
 import json
 import os
 import time
@@ -21,12 +22,15 @@ from config import (
 from context import compress_conversation, should_compress
 from logger import log_event
 from parser import parse_response
-from prompts import SYSTEM_PROMPT
-from tools import TOOL_REGISTRY, execute_tool
+from prompts import build_system_prompt
+from tool_dispatch import execute_tool_async, format_observation
+from tools import TOOL_REGISTRY
 
 EventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 LLMCallable = Callable[[list[dict[str, str]], str | None, str, int | None], Awaitable[str]]
-ToolExecutor = Callable[[str, Any], str]  # 工具执行函数，接收工具名和已验证的模型实例
+# 工具执行函数：同步函数会被放进线程池，协程函数会被直接 await
+ToolExecutor = Callable[[str, Any], str | Awaitable[str]]
+
 
 # 模块级异步HTTP客户端，随应用生命周期复用连接池
 _client: httpx.AsyncClient | None = None
@@ -53,7 +57,8 @@ def _is_retryable_status(status: int) -> bool:
 
 def _build_full_messages(messages: list[dict], skill_prompt: str | None) -> list[dict]:
     """构建完整的消息列表，包含系统提示"""
-    full_system_prompt = f"{skill_prompt}\n{SYSTEM_PROMPT}" if skill_prompt else SYSTEM_PROMPT
+    system_prompt = build_system_prompt()
+    full_system_prompt = f"{skill_prompt}\n{system_prompt}" if skill_prompt else system_prompt
     full_messages = [{"role": "system", "content": full_system_prompt}]
     full_messages.extend(messages)
     return full_messages
@@ -189,18 +194,18 @@ class HistoryManager:
             # 加载失败时，记录错误并返回新历史
             await self.emit("history_load_error", {"error": str(error)})
             return [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": build_system_prompt()},
                 {"role": "user", "content": self.task},
             ]
 
         # 内存操作，不需要异步
         if not history:
             return [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": build_system_prompt()},
                 {"role": "user", "content": self.task},
             ]
         if not any(m.get("role") == "system" for m in history):
-            history.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
+            history.insert(0, {"role": "system", "content": build_system_prompt()})
         return history
 
     async def append_and_save(
@@ -237,7 +242,7 @@ class HistoryManager:
                     history,
                     self.llm_call,
                     self.task,
-                    SYSTEM_PROMPT,
+                    build_system_prompt(),
                     CONTEXT_KEEP_RECENT_MESSAGES,
                     session_id=self.session_id,
                     step=self.current_step,
@@ -288,6 +293,50 @@ def _validate_tool_input(model_cls: BaseModel, tool_input: Any) -> Any:
     return model_cls.model_validate(tool_input)
 
 
+def _tool_timeout(tool_name: str) -> float:
+    """按工具返回超时秒数。
+
+    阶段 2 接入 MCP 后，MCP 工具改用独立的 ``RAG_MCP_TOOL_TIMEOUT``（跨进程调用更慢）；
+    这里读模块级常量而非配置快照，便于测试 monkeypatch。
+    """
+    return TOOL_TIMEOUT
+
+
+async def _run_tool(
+    tool_executor: ToolExecutor,
+    tool_name: str,
+    validated_input: Any,
+    timeout: float,
+) -> Any:
+    """调用工具执行器，兼容同步与异步两种实现。
+
+    协程函数直接 await；普通函数放进线程池，避免文件 IO 阻塞事件循环。
+    线程池返回的若仍是 awaitable（如 partial 包装的协程），再 await 一次兜底——
+    否则它会以 ``<coroutine object ...>`` 的形式被写进 observation，模型读不懂且不会报错。
+
+    Args:
+        tool_executor: 工具执行器
+        tool_name: 工具名称
+        validated_input: 已校验的入参
+        timeout: 超时秒数
+
+    Returns:
+        工具原始返回值
+
+    Raises:
+        asyncio.TimeoutError: 超过 timeout 未返回
+    """
+    if inspect.iscoroutinefunction(tool_executor):
+        return await asyncio.wait_for(tool_executor(tool_name, validated_input), timeout)
+
+    result = await asyncio.wait_for(
+        asyncio.to_thread(tool_executor, tool_name, validated_input), timeout
+    )
+    if inspect.isawaitable(result):
+        result = await asyncio.wait_for(result, timeout)
+    return result
+
+
 async def _execute_action(
         tool_result: Any,
         tool_executor: ToolExecutor,
@@ -315,9 +364,8 @@ async def _execute_action(
         return observation
 
     try:
-        tool_result = await asyncio.wait_for(
-            asyncio.to_thread(tool_executor, tool_name, validated_input),
-            TOOL_TIMEOUT,
+        raw_output = await _run_tool(
+            tool_executor, tool_name, validated_input, _tool_timeout(tool_name)
         )
     except TimeoutError:
         observation = f"工具调用超时: 工具 {tool_name} 超时"
@@ -328,7 +376,7 @@ async def _execute_action(
         await emit("tool_error", {"error": observation, "duration_ms": _elapsed_ms(started_at)})
         return observation
 
-    observation = f"工具输出: {tool_result}"
+    observation = format_observation(raw_output)
     await emit("tool_call", {"tool_name": tool_name, "tool_input": tool_input})
     await emit("tool_output", {"output": observation, "duration_ms": _elapsed_ms(started_at)})
     return observation
@@ -344,7 +392,7 @@ async def run_agent(
         max_steps: int | None = None,
         on_event: EventCallback | None = None,
         llm_call: LLMCallable = call_llm,
-        tool_executor: ToolExecutor = execute_tool,
+        tool_executor: ToolExecutor = execute_tool_async,
         budget: StepBudget | None = None,
 ) -> str:
     """执行一个 ReAct 任务；依赖可注入，便于测试和嵌入其他应用。"""
