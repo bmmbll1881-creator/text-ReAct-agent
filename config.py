@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 # 加载 .env 文件中的环境变量
 load_dotenv()
 
+
 def _required_url(name: str) -> str:
     """获取必需的 URL 配置项。
     参数：
@@ -22,6 +23,7 @@ def _required_url(name: str) -> str:
     if not value:
         raise ValueError(f"{name} 是必需的配置项")
     return value
+
 
 def _int_env(name: str, default: int, *, minimum: int | None = None, positive: bool = False) -> int:
     """从环境变量读取整数配置。
@@ -252,9 +254,7 @@ class Config:
             # 上下文 token 限制，默认 4000
             context_token_limit=_int_env("CONTEXT_TOKEN_LIMIT", 4000, positive=True),
             # 保留最近消息数，默认 4，最小为 0
-            context_keep_recent_messages=_int_env(
-                "CONTEXT_KEEP_RECENT_MESSAGES", 4, minimum=0
-            ),
+            context_keep_recent_messages=_int_env("CONTEXT_KEEP_RECENT_MESSAGES", 4, minimum=0),
             # 读取文件最大字符数，默认 100000
             max_read_chars=_int_env("MAX_READ_CHARS", 100_000, positive=True),
             # 写入文件最大字符数，默认 100000
@@ -323,11 +323,15 @@ MAX_OBSERVATION_CHARS = config.max_observation_chars  # observation 最大字符
 ALLOWED_SUFFIXES = config.allowed_suffixes  # 允许的文件后缀
 MAX_CONCURRENT_RUNS = config.max_concurrent_runs  # 最大并发运行数
 EMIT_THOUGHT = config.emit_thought  # 是否发送推理内容
-MAX_QUEUE_SIZE = config.max_queue_size # 最大队列数
+MAX_QUEUE_SIZE = config.max_queue_size  # 最大队列数
 MAX_TASK_LENGTH = config.max_task_length  # API 任务参数最大字符数 / Maximum API task length
-MAX_SESSION_ID_LENGTH = config.max_session_id_length  # API 会话 ID 最大字符数 / Maximum session ID length
+MAX_SESSION_ID_LENGTH = (
+    config.max_session_id_length
+)  # API 会话 ID 最大字符数 / Maximum session ID length
 SSE_KEEPALIVE_SECONDS = config.sse_keepalive_seconds  # SSE 保活事件间隔 / SSE keep-alive interval
-EVENT_QUEUE_PUT_TIMEOUT = config.event_queue_put_timeout  # 事件写入队列超时 / Event queue put timeout
+EVENT_QUEUE_PUT_TIMEOUT = (
+    config.event_queue_put_timeout
+)  # 事件写入队列超时 / Event queue put timeout
 # ---- MCP 知识库服务 ----
 RAG_MCP_ENABLED = config.rag_mcp_enabled  # 是否启用 MCP 知识库工具
 RAG_MCP_PYTHON = config.rag_mcp_python  # RAG 解释器路径

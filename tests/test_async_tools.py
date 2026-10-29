@@ -76,6 +76,7 @@ async def test_async_tool_executor_result_reaches_observation():
 @pytest.mark.asyncio
 async def test_sync_tool_executor_still_supported():
     """同步执行器（现有测试与旧调用方）继续可用。"""
+
     async def llm(_messages, _skill=None, _session="", _step=None):
         if not ran:
             ran.append(True)
@@ -89,6 +90,7 @@ async def test_sync_tool_executor_still_supported():
 @pytest.mark.asyncio
 async def test_awaitable_returned_from_thread_is_awaited():
     """partial / 可调用对象包装的协程不会被漏掉。"""
+
     class ReturnsCoroutine:
         def __call__(self, _name, _payload):
             return asyncio.sleep(0, result="wrapped")
@@ -223,7 +225,9 @@ def test_format_observation_hard_truncates_when_nothing_fits():
 
 def test_system_prompt_lists_knowledge_base_aliases(monkeypatch):
     """提示词必须带上可用知识库，否则模型会对所有问题都用缺省库。"""
-    monkeypatch.setattr(prompts, "RAG_MCP_KB_ALIASES", "financial_report=财务报告,contract=合同条款")
+    monkeypatch.setattr(
+        prompts, "RAG_MCP_KB_ALIASES", "financial_report=财务报告,contract=合同条款"
+    )
     monkeypatch.setattr(prompts, "RAG_MCP_DEFAULT_KB", "financial_report")
     prompts.build_system_prompt.cache_clear()
     try:
@@ -281,23 +285,22 @@ async def test_disabled_backend_returns_disabled_status():
 @pytest.mark.asyncio
 async def test_knowledge_result_reaches_observation_as_json():
     """端到端（不启子进程）：工具返回 dict → observation 是合法 JSON 且保留引用。"""
-    stub = knowledge_backend.StubKnowledgeBackend({
-        "status": "success",
-        "route": "success",
-        "answer": "2025年第三季度营业收入为100万元。 [S1]",
-        "citations": ["S1"],
-        "run_id": "run_1",
-    })
+    stub = knowledge_backend.StubKnowledgeBackend(
+        {
+            "status": "success",
+            "route": "success",
+            "answer": "2025年第三季度营业收入为100万元。 [S1]",
+            "citations": ["S1"],
+            "run_id": "run_1",
+        }
+    )
     knowledge_backend.set_backend(stub)
     seen: list[str] = []
 
     async def llm(messages, _skill=None, _session="", _step=None):
         seen.append(messages[-1]["content"])
         if len(seen) == 1:
-            return (
-                'Action: knowledge_search\n'
-                'Action Input: {"question": "2025Q3 营收是多少"}'
-            )
+            return 'Action: knowledge_search\nAction Input: {"question": "2025Q3 营收是多少"}'
         return "Final Answer: 营收 100 万元 [S1]"
 
     try:
@@ -368,6 +371,10 @@ def test_system_prompt_adds_knowledge_rules_when_mcp_tool_registered(monkeypatch
 async def run(task: str, llm, tool_executor) -> str:
     """用替身预算运行一个任务，避免依赖 Redis。"""
     return await agent.run_agent(
-        task, "s", max_steps=4, llm_call=llm, tool_executor=tool_executor,
+        task,
+        "s",
+        max_steps=4,
+        llm_call=llm,
+        tool_executor=tool_executor,
         budget=FakeBudget(),
     )

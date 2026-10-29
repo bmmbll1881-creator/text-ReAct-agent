@@ -1,4 +1,5 @@
 """运行隔离的离线评估 / Run deterministic, isolated offline evaluations."""
+
 from __future__ import annotations
 
 import argparse
@@ -67,10 +68,14 @@ def isolated_workspace(path: Path):
     finally:
         tools.WORK_SPACE = old_workspace
         env = os.environ
-        if old_env is None: env.pop("WORKSPACE", None)
-        else: env["WORKSPACE"] = old_env
-        if old_legacy is None: env.pop("WORK_SPACE", None)
-        else: env["WORK_SPACE"] = old_legacy
+        if old_env is None:
+            env.pop("WORKSPACE", None)
+        else:
+            env["WORKSPACE"] = old_env
+        if old_legacy is None:
+            env.pop("WORK_SPACE", None)
+        else:
+            env["WORK_SPACE"] = old_legacy
 
 
 def check_expected(output: str, expected: Any) -> bool:
@@ -97,7 +102,14 @@ def _write_setup(workspace: Path, setup: Iterable[dict[str, str]]) -> None:
         target.write_text(item.get("content", ""), encoding="utf-8")
 
 
-async def evaluate(tasks: list[dict[str, Any]], model: str | None = None, *, offline: bool = False, deterministic_agent: bool = False, real_llm: bool = False) -> list[dict[str, Any]]:
+async def evaluate(
+    tasks: list[dict[str, Any]],
+    model: str | None = None,
+    *,
+    offline: bool = False,
+    deterministic_agent: bool = False,
+    real_llm: bool = False,
+) -> list[dict[str, Any]]:
     results = []
     for task in tasks:
         started = time.perf_counter()
@@ -111,7 +123,10 @@ async def evaluate(tasks: list[dict[str, Any]], model: str | None = None, *, off
             session_id = f"eval-{task['name']}-{uuid.uuid4().hex}"
             try:
                 kwargs = {}
-                async def collect_event(name: str, payload: dict[str, Any], event_log=events) -> None:
+
+                async def collect_event(
+                    name: str, payload: dict[str, Any], event_log=events
+                ) -> None:
                     event_log.append((name, payload))
 
                 kwargs["on_event"] = collect_event
@@ -121,15 +136,21 @@ async def evaluate(tasks: list[dict[str, Any]], model: str | None = None, *, off
                     kwargs["max_steps"] = task["max_steps"]
                 if deterministic_agent:
                     max_steps = task.get("max_steps", 12)
-                    kwargs.update(llm_call=ScriptedLLM(task["prompt"], task.get("replies")),
-                                  budget=MemoryBudget(session_id, max_steps), max_steps=max_steps)
+                    kwargs.update(
+                        llm_call=ScriptedLLM(task["prompt"], task.get("replies")),
+                        budget=MemoryBudget(session_id, max_steps),
+                        max_steps=max_steps,
+                    )
                 with isolated_workspace(workspace):
                     runner = offline_run_agent if offline else run_agent
                     try:
                         result = await runner(task["prompt"], session_id, **kwargs)
                         output = str(result)
                     except Exception as exc:
-                        if not task.get("expected_error") or (isinstance(task["expected_error"], str) and task["expected_error"].lower() not in str(exc).lower()):
+                        if not task.get("expected_error") or (
+                            isinstance(task["expected_error"], str)
+                            and task["expected_error"].lower() not in str(exc).lower()
+                        ):
                             raise
                         error = str(exc)
                 event_output = "\n".join(
@@ -144,7 +165,9 @@ async def evaluate(tasks: list[dict[str, Any]], model: str | None = None, *, off
                 output = "\n".join(part for part in (output, event_output, file_output) if part)
                 for expected_file in task.get("expected_files", []):
                     if not (workspace / expected_file).is_file():
-                        raise AssertionError(f"expected output file was not created: {expected_file}")
+                        raise AssertionError(
+                            f"expected output file was not created: {expected_file}"
+                        )
                 for unexpected_file in task.get("absent_files", []):
                     if (workspace / unexpected_file).exists():
                         raise AssertionError(f"unexpected file was created: {unexpected_file}")
@@ -153,15 +176,34 @@ async def evaluate(tasks: list[dict[str, Any]], model: str | None = None, *, off
                 expected_events = [] if real_llm else task.get("expected_events", [])
                 missing_events = set(expected_events) - {name for name, _ in events}
                 if missing_events:
-                    raise AssertionError(f"expected events were not emitted: {sorted(missing_events)}")
+                    raise AssertionError(
+                        f"expected events were not emitted: {sorted(missing_events)}"
+                    )
                 if task.get("expected_error") and error:
                     output = f"{output}\n{error}"
-                expected = task.get("online_expected", task.get("expected")) if real_llm else task.get("expected")
+                expected = (
+                    task.get("online_expected", task.get("expected"))
+                    if real_llm
+                    else task.get("expected")
+                )
                 status = "passed" if check_expected(output, expected) else "failed"
-            except Exception as exc:  # 记录单项失败而不中断评估 / Record task failure without aborting the suite
+            except (
+                Exception
+            ) as exc:  # 记录单项失败而不中断评估 / Record task failure without aborting the suite
                 error = str(exc)
             steps = sum(1 for name, _ in events if name == "step_start")
-            results.append({"name": task["name"], "category": task.get("category", "uncategorized"), "status": status, "passed": status == "passed", "steps": steps, "output": output, "error": error, "duration_ms": round((time.perf_counter() - started) * 1000, 3)})
+            results.append(
+                {
+                    "name": task["name"],
+                    "category": task.get("category", "uncategorized"),
+                    "status": status,
+                    "passed": status == "passed",
+                    "steps": steps,
+                    "output": output,
+                    "error": error,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                }
+            )
     return results
 
 
@@ -179,22 +221,44 @@ async def main_async(args: argparse.Namespace) -> int:
     deterministic_agent = getattr(args, "deterministic_agent", False)
     if deterministic_agent:
         offline = False
-    results = await evaluate(tasks, args.model, offline=offline,
-                             deterministic_agent=deterministic_agent,
-                             real_llm=getattr(args, "online", False))
+    results = await evaluate(
+        tasks,
+        args.model,
+        offline=offline,
+        deterministic_agent=deterministic_agent,
+        real_llm=getattr(args, "online", False),
+    )
     passed = sum(item["passed"] for item in results)
     total = len(results)
     categories = {}
     for result in results:
-        group = categories.setdefault(result["category"], {"total": 0, "passed": 0, "pass_rate": 0.0})
+        group = categories.setdefault(
+            result["category"], {"total": 0, "passed": 0, "pass_rate": 0.0}
+        )
         group["total"] += 1
         group["passed"] += int(result["passed"])
     for group in categories.values():
         group["pass_rate"] = group["passed"] / group["total"] if group["total"] else 0.0
-    report = {"summary": {"total": total, "passed": passed, "failed": total - passed, "pass_rate": passed / total if total else 0.0, "average_steps": sum(item["steps"] for item in results) / total if total else 0.0, "average_duration_ms": sum(item["duration_ms"] for item in results) / total if total else 0.0, "categories": categories, "fail_under": args.fail_under}, "results": results}
+    report = {
+        "summary": {
+            "total": total,
+            "passed": passed,
+            "failed": total - passed,
+            "pass_rate": passed / total if total else 0.0,
+            "average_steps": sum(item["steps"] for item in results) / total if total else 0.0,
+            "average_duration_ms": sum(item["duration_ms"] for item in results) / total
+            if total
+            else 0.0,
+            "categories": categories,
+            "fail_under": args.fail_under,
+        },
+        "results": results,
+    }
     output = json.dumps(report, ensure_ascii=False, indent=2)
     if args.report_path:
-        path = Path(args.report_path); path.parent.mkdir(parents=True, exist_ok=True); path.write_text(output + "\n", encoding="utf-8")
+        path = Path(args.report_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(output + "\n", encoding="utf-8")
     else:
         print(output)
     return 1 if report["summary"]["pass_rate"] < args.fail_under else 0
@@ -208,8 +272,11 @@ def main() -> None:
     parser.add_argument("--fail-under", type=float, default=0.8)
     parser.add_argument("--model")
     parser.add_argument("--online", action="store_true", help="use real LLM/Redis agent")
-    parser.add_argument("--deterministic-agent", action="store_true",
-                        help="run real Agent loop with ScriptedLLM and in-memory budget")
+    parser.add_argument(
+        "--deterministic-agent",
+        action="store_true",
+        help="run real Agent loop with ScriptedLLM and in-memory budget",
+    )
     raise SystemExit(asyncio.run(main_async(parser.parse_args())))
 
 

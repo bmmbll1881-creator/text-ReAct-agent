@@ -71,8 +71,8 @@ async def health():
     return {"status": "ok", "mcp": getattr(app.state, "mcp_status", "disabled")}
 
 
-
-@app.post("/invoke",
+@app.post(
+    "/invoke",
     responses={
         409: {
             "description": "Session busy: the session is currently occupied by another request",
@@ -82,7 +82,8 @@ async def health():
             "description": "Server error: unexpected failure while running the agent",
             "content": {"application/json": {"example": {"detail": "server error"}}},
         },
-    },)
+    },
+)
 async def invoke(task_request: TaskRequest):
     try:
         async with _global_semaphore:
@@ -92,6 +93,7 @@ async def invoke(task_request: TaskRequest):
         raise HTTPException(status_code=409, detail="session busy") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail="server error") from exc
+
 
 def _format_sse(event: str, data: dict[str, Any]) -> str:
     """格式化 SSE 消息 / Format an SSE message."""
@@ -145,18 +147,16 @@ async def _event_generator(
 
 async def _sse_event_generator(agent_task: asyncio.Task, format_sse, queue: asyncio.Queue):
     while True:
-            # 如果 Agent 任务已完成且队列为空，结束循环 / Stop when task and queue are complete
+        # 如果 Agent 任务已完成且队列为空，结束循环 / Stop when task and queue are complete
         if agent_task.done() and queue.empty():
             break
 
         try:
-                # 等待新事件，15 秒超时用于发送 keep-alive / Wait for events and emit keep-alives
-                event, data = await asyncio.wait_for(
-                    queue.get(), timeout=SSE_KEEPALIVE_SECONDS
-                )
-                yield format_sse(event, data)
+            # 等待新事件，15 秒超时用于发送 keep-alive / Wait for events and emit keep-alives
+            event, data = await asyncio.wait_for(queue.get(), timeout=SSE_KEEPALIVE_SECONDS)
+            yield format_sse(event, data)
         except TimeoutError:
-                # 超时未获取到事件，检查是否需要退出 / Check completion after timeout
+            # 超时未获取到事件，检查是否需要退出 / Check completion after timeout
             if agent_task.done() and queue.empty():
                 break
             # 发送 keep-alive 注释 / Send an SSE keep-alive comment

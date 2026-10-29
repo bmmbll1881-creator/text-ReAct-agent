@@ -18,7 +18,9 @@ class ParseResult:
 
 def _strip_fences(text: str) -> str:
     """移除 Markdown 代码围栏，保留其中的协议内容。"""
-    return "\n".join(line for line in text.splitlines() if not line.strip().startswith("```")).strip()
+    return "\n".join(
+        line for line in text.splitlines() if not line.strip().startswith("```")
+    ).strip()
 
 
 def _extract_json_object(text: str, start: int) -> tuple[dict | None, int | None]:
@@ -28,10 +30,10 @@ def _extract_json_object(text: str, start: int) -> tuple[dict | None, int | None
         return None, None
     brace_start = start + len(text[start:]) - len(remainder)
     end_pos = _find_matching_brace(text, brace_start)
-    if end_pos is None or text[end_pos + 1:].strip():
+    if end_pos is None or text[end_pos + 1 :].strip():
         return None, None
     try:
-        return json.loads(text[brace_start:end_pos + 1]), end_pos + 1
+        return json.loads(text[brace_start : end_pos + 1]), end_pos + 1
     except json.JSONDecodeError:
         return None, None
 
@@ -91,5 +93,9 @@ def parse_response(text: str) -> ParseResult:
 
     action_input, _ = _extract_json_object(text, input_header.end())
     if not isinstance(action_input, dict):
-        return ParseResult(thought=thought, action=action_match.group(1), error="Action Input 必须是有效的 JSON 对象")
+        return ParseResult(
+            thought=thought,
+            action=action_match.group(1),
+            error="Action Input 必须是有效的 JSON 对象",
+        )
     return ParseResult(thought=thought, action=action_match.group(1), action_input=action_input)

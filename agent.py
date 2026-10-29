@@ -1,4 +1,5 @@
 """ReAct Agent 的运行入口。"""
+
 import asyncio
 import inspect
 import json
@@ -36,18 +37,23 @@ ToolExecutor = Callable[[str, Any], str | Awaitable[str]]
 # 模块级异步HTTP客户端，随应用生命周期复用连接池
 _client: httpx.AsyncClient | None = None
 
+
 class MaxStepsExceeded(Exception):
     """步骤超限异常。"""
 
 
-def get_http_client() -> httpx.AsyncClient:  # httpx.AsyncClient 的构造是同步的，因为采用懒连接池，所以这里采用同步方式
+def get_http_client() -> (
+    httpx.AsyncClient
+):  # httpx.AsyncClient 的构造是同步的，因为采用懒连接池，所以这里采用同步方式
     global _client
     if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(timeout=httpx.Timeout(LLM_TIMEOUT))
     return _client
 
 
-async def _request_llm(client, url: str, headers: dict[str, str], data: dict[str, Any]) -> httpx.Response:
+async def _request_llm(
+    client, url: str, headers: dict[str, str], data: dict[str, Any]
+) -> httpx.Response:
     response = await client.post(url, headers=headers, json=data)
     response.raise_for_status()
     return response
@@ -55,6 +61,7 @@ async def _request_llm(client, url: str, headers: dict[str, str], data: dict[str
 
 def _is_retryable_status(status: int) -> bool:
     return status == 429 or 500 <= status < 600
+
 
 def _build_full_messages(messages: list[dict], skill_prompt: str | None) -> list[dict]:
     """构建完整的消息列表，包含系统提示"""
@@ -96,11 +103,12 @@ def _extract_content(response: httpx.Response, session_id: str, step: int | None
     return content
 
 
-async def call_llm(messages: list[dict],
-                   skill_prompt: str | None = None,
-                   session_id: str = "",
-                   step: int | None = None
-    ) -> str:
+async def call_llm(
+    messages: list[dict],
+    skill_prompt: str | None = None,
+    session_id: str = "",
+    step: int | None = None,
+) -> str:
     """
     异步调用deepseek， 带重试，超时
     Args:
@@ -137,7 +145,7 @@ async def call_llm(messages: list[dict],
         try:
             response = await _request_llm(client, url, headers, data)
             response.raise_for_status()
-            return _extract_content(response, session_id, step)   # 成功则直接返回，提前退出
+            return _extract_content(response, session_id, step)  # 成功则直接返回，提前退出
 
         except (httpx.ConnectError, httpx.ReadTimeout) as error:
             # 连接错误或读取超时重试
@@ -155,13 +163,16 @@ async def call_llm(messages: list[dict],
     raise RuntimeError("LLM调用失败")
 
 
-async def _retry(attempt: int, error, max_attempts: int, *, session_id: str = "", step: int | None = None):
+async def _retry(
+    attempt: int, error, max_attempts: int, *, session_id: str = "", step: int | None = None
+):
     """重试逻辑，避免重复代码。"""
     if attempt == max_attempts:
         raise error
-    wait = 2 ** attempt
+    wait = 2**attempt
     log_event("llm_retry", session_id, step, reason=str(error), wait=wait)
     await asyncio.sleep(wait)
+
 
 class HistoryManager:
     """管理对话历史的追加、压缩和持久化。"""
@@ -342,9 +353,9 @@ async def _run_tool(
 
 
 async def _execute_action(
-        tool_result: Any,
-        tool_executor: ToolExecutor,
-        emit: EventCallback,
+    tool_result: Any,
+    tool_executor: ToolExecutor,
+    emit: EventCallback,
 ) -> str:
     """执行 LLM 输出中解析出的动作，返回 observation 文本。"""
     started_at = time.perf_counter()
@@ -388,29 +399,33 @@ async def _execute_action(
     await emit("tool_call", {"tool_name": tool_name, "tool_input": tool_input})
     await emit("tool_output", {"output": observation, "duration_ms": _elapsed_ms(started_at)})
     if isinstance(raw_output, dict) and "status" in raw_output:
-        await emit("knowledge_result", {
-            "knowledge_base": raw_output.get("knowledge_base"),
-            "status": raw_output.get("status"),
-            "route": raw_output.get("route"),
-            "run_id": raw_output.get("run_id"),
-            "citations": raw_output.get("citations") or [],
-            "failure_type": raw_output.get("failure_type"),
-        })
+        await emit(
+            "knowledge_result",
+            {
+                "knowledge_base": raw_output.get("knowledge_base"),
+                "status": raw_output.get("status"),
+                "route": raw_output.get("route"),
+                "run_id": raw_output.get("run_id"),
+                "citations": raw_output.get("citations") or [],
+                "failure_type": raw_output.get("failure_type"),
+            },
+        )
     return observation
 
 
 def _elapsed_ms(started_at: float) -> float:
     return round((time.perf_counter() - started_at) * 1000, 3)
 
+
 async def run_agent(
-        task: str,
-        session_id: str,
-        *,
-        max_steps: int | None = None,
-        on_event: EventCallback | None = None,
-        llm_call: LLMCallable = call_llm,
-        tool_executor: ToolExecutor = execute_tool_async,
-        budget: StepBudget | None = None,
+    task: str,
+    session_id: str,
+    *,
+    max_steps: int | None = None,
+    on_event: EventCallback | None = None,
+    llm_call: LLMCallable = call_llm,
+    tool_executor: ToolExecutor = execute_tool_async,
+    budget: StepBudget | None = None,
 ) -> str:
     """执行一个 ReAct 任务；依赖可注入，便于测试和嵌入其他应用。"""
     max_steps = _resolve_max_steps(max_steps, budget)
@@ -420,8 +435,11 @@ async def run_agent(
     current_step: int | None = None
 
     async def emit(event_type, data):
-        log_data = {key: value for key, value in data.items()
-                    if key not in {"timestamp", "event", "session_id", "step"}}
+        log_data = {
+            key: value
+            for key, value in data.items()
+            if key not in {"timestamp", "event", "session_id", "step"}
+        }
         log_event(event_type, session_id, current_step, **log_data)
         if on_event:
             await on_event(event_type, data)
@@ -452,8 +470,10 @@ async def run_agent(
                 await emit("llm_error", {"error": str(error)})
                 history = await history_manager.append_many_and_save(  # type: ignore
                     history,
-                    [{"role": "user", "content": f"LLM错误: {error!s}"},
-                    {"role": "user", "content": "continue the task"}]
+                    [
+                        {"role": "user", "content": f"LLM错误: {error!s}"},
+                        {"role": "user", "content": "continue the task"},
+                    ],
                 )
                 continue
 
@@ -477,11 +497,9 @@ async def run_agent(
                 return llm_result.final_answer
 
             observation = await _execute_action(llm_result, tool_executor, emit)
-            history = await history_manager.append_and_save(history, "user", observation) # type: ignore
+            history = await history_manager.append_and_save(history, "user", observation)  # type: ignore
 
-        raise MaxStepsExceeded(
-            f"达到最大步数 {max_steps}，请增加最大步数或优化任务。"
-        )
+        raise MaxStepsExceeded(f"达到最大步数 {max_steps}，请增加最大步数或优化任务。")
 
     finally:
         await asyncio.to_thread(budget.release_lock)
@@ -497,9 +515,7 @@ if __name__ == "__main__":
     args = cli.parse_args()
 
     try:
-        result = asyncio.run(
-            run_agent(args.task, args.session_id, max_steps=args.max_steps)
-        )
+        result = asyncio.run(run_agent(args.task, args.session_id, max_steps=args.max_steps))
         # 使用结构化日志记录最终结果
         log_event(
             "agent_result",

@@ -86,7 +86,8 @@ Route.VERIFICATION_FAILED → status="verification_failed"  有草稿答案但�
 
 ```python
 tool_result = await asyncio.wait_for(
-    asyncio.to_thread(tool_executor, tool_name, validated_input), TOOL_TIMEOUT)
+    asyncio.to_thread(tool_executor, tool_name, validated_input), TOOL_TIMEOUT
+)
 ```
 
 若 `tool_executor` 变成 async 函数，`to_thread` 拿到的是 coroutine 对象，随后 `f"工具输出: {tool_result}"` 会输出 `<coroutine object ...>` 并触发 `RuntimeWarning: never awaited`，Agent 不会报错但永远拿不到结果 —— 这是最隐蔽的坑。
@@ -98,11 +99,13 @@ tool_result = await asyncio.wait_for(
 ```python
 ToolExecutor = Callable[[str, Any], str | Awaitable[str]]  # 类型放宽
 
+
 async def _run_tool(tool_executor, tool_name, validated_input, timeout):
     if inspect.iscoroutinefunction(tool_executor):
         return await asyncio.wait_for(tool_executor(tool_name, validated_input), timeout)
     return await asyncio.wait_for(
-        asyncio.to_thread(tool_executor, tool_name, validated_input), timeout)
+        asyncio.to_thread(tool_executor, tool_name, validated_input), timeout
+    )
 ```
 
 优点：现有测试传 `tool_executor=lambda *_: "ok"` 无需改动，保持向后兼容。
@@ -124,9 +127,9 @@ async def _run_tool(tool_executor, tool_name, validated_input, timeout):
 - 建议拆成两份源数据，避免"注册了但调不通"的半成品状态：
 
 ```python
-LOCAL_TOOL_REGISTRY = {"read_file": {...}, "write_file": {...}}   # 含 func
-MCP_TOOL_SPECS      = {"knowledge_search": {"model": ..., "description": ...}}
-TOOL_REGISTRY       = {**LOCAL_TOOL_REGISTRY, **MCP_TOOL_SPECS}   # 供校验与提示词使用
+LOCAL_TOOL_REGISTRY = {"read_file": {...}, "write_file": {...}}  # 含 func
+MCP_TOOL_SPECS = {"knowledge_search": {"model": ..., "description": ...}}
+TOOL_REGISTRY = {**LOCAL_TOOL_REGISTRY, **MCP_TOOL_SPECS}  # 供校验与提示词使用
 ```
 
 ### C5 演示场景修正
@@ -179,8 +182,10 @@ def format_observation(payload: dict, limit: int = 4000) -> str:
 
 ```python
 def build_system_prompt() -> str:
-    lines = [f"{i}. {name}：{meta['description']}\n   输入 {json.dumps(meta['input_schema'], ensure_ascii=False)}"
-             for i, (name, meta) in enumerate(TOOL_REGISTRY.items(), 1)]
+    lines = [
+        f"{i}. {name}：{meta['description']}\n   输入 {json.dumps(meta['input_schema'], ensure_ascii=False)}"
+        for i, (name, meta) in enumerate(TOOL_REGISTRY.items(), 1)
+    ]
     return SYSTEM_PROMPT_TEMPLATE.format(tool_list="\n".join(lines))
 ```
 
@@ -202,7 +207,8 @@ def build_system_prompt() -> str:
 class KnowledgeBackend(Protocol):
     async def search(self, question: str, knowledge_base: str | None) -> dict: ...
 
-McpKnowledgeBackend   # 生产：持 ClientSession
+
+McpKnowledgeBackend  # 生产：持 ClientSession
 StubKnowledgeBackend  # 测试：返回预置 payload（success/abstain/clarify/异常/超时）
 NullKnowledgeBackend  # RAG_MCP_ENABLED=false 时：返回 status=disabled
 ```
@@ -214,8 +220,10 @@ NullKnowledgeBackend  # RAG_MCP_ENABLED=false 时：返回 status=disabled
 `api.py` 已有 `/stream`，`_execute_action` 已经会发 `tool_call` / `tool_output`。联调与展示需要的是"这次回答引用了哪份证据、能不能点进 trace"，建议在 `_execute_action` 里对 MCP 工具额外发一个事件：
 
 ```python
-await emit("knowledge_result", {"run_id": ..., "route": ..., "status": ...,
-                                "citations": [...], "failure_type": ...})
+await emit(
+    "knowledge_result",
+    {"run_id": ..., "route": ..., "status": ..., "citations": [...], "failure_type": ...},
+)
 ```
 
 前端/演示脚本即可显示 `run_id` 并调用 `rag_run_detail` 展开完整 trace —— 这正是"可追溯"卖点的可视化落点，原规划把它推到了"最后再做"。
@@ -565,8 +573,8 @@ async def execute_tool_async(tool_name, validated_input) -> str:
         return await asyncio.to_thread(execute_tool, tool_name, validated_input)
     raise ValueError(f"未知工具：{tool_name}")
 
-def format_observation(payload: dict, limit: int = MAX_OBSERVATION_CHARS) -> str:
-    ...
+
+def format_observation(payload: dict, limit: int = MAX_OBSERVATION_CHARS) -> str: ...
 ```
 
 ## B.4 `agent.py`（C3 的核心改动）
@@ -574,11 +582,13 @@ def format_observation(payload: dict, limit: int = MAX_OBSERVATION_CHARS) -> str
 ```python
 ToolExecutor = Callable[[str, Any], str | Awaitable[str]]
 
+
 async def _run_tool(tool_executor, tool_name, validated_input, timeout):
     if inspect.iscoroutinefunction(tool_executor):
         return await asyncio.wait_for(tool_executor(tool_name, validated_input), timeout)
     return await asyncio.wait_for(
-        asyncio.to_thread(tool_executor, tool_name, validated_input), timeout)
+        asyncio.to_thread(tool_executor, tool_name, validated_input), timeout
+    )
 ```
 
 同时把 `_execute_action` 的超时改成按工具取值：MCP 工具用 `RAG_MCP_TOOL_TIMEOUT`，本地工具用 `TOOL_TIMEOUT`。

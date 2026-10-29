@@ -1,4 +1,5 @@
 """In-process session budget/history for offline demos; no Redis locking."""
+
 from __future__ import annotations
 
 import threading

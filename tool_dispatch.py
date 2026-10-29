@@ -34,22 +34,13 @@ _STATUS_CONSTRAINTS: dict[str, str] = {
         "请如实说明当前知识库没有足够证据，并给出可执行的下一步"
         "（补充文档、缩小问题范围或改用匹配的知识库）。"
     ),
-    "clarify": (
-        "知识库返回 clarify（问题存在歧义）。先向用户确认歧义点，"
-        "不要自行假设后作答。"
-    ),
+    "clarify": ("知识库返回 clarify（问题存在歧义）。先向用户确认歧义点，不要自行假设后作答。"),
     "verification_failed": (
         "知识库返回 verification_failed（引用校验未通过）。"
         "不得把该结论当作事实陈述，需说明结论未通过校验。"
     ),
-    "disabled": (
-        "知识库工具未启用。不得假装已查询过知识库，"
-        "需告知用户该能力当前不可用。"
-    ),
-    "error": (
-        "知识库调用返回 error（配置或索引问题）。"
-        "如实说明原因，不要用常识替代证据。"
-    ),
+    "disabled": ("知识库工具未启用。不得假装已查询过知识库，需告知用户该能力当前不可用。"),
+    "error": ("知识库调用返回 error（配置或索引问题）。如实说明原因，不要用常识替代证据。"),
 }
 
 
@@ -72,12 +63,9 @@ def constraint_for(payload: Any) -> str:
     return f"[系统约束] {template}{suffix}"
 
 
-
 async def _run_knowledge_search(validated_input: Any) -> dict[str, Any]:
     """调用知识库后端；后端未启用时返回 disabled，由 Agent 如实告知。"""
-    return await get_backend().search(
-        validated_input.question, validated_input.knowledge_base
-    )
+    return await get_backend().search(validated_input.question, validated_input.knowledge_base)
 
 
 #: MCP 工具名 -> 执行协程。新增 MCP 工具时只需在这里加一行。
@@ -199,9 +187,7 @@ def format_observation(
         for answer_keep, evidence_keep in _SHRINK_LEVELS:
             if len(body) <= limit:
                 break
-            body = json.dumps(
-                _compact(payload, answer_keep, evidence_keep), ensure_ascii=False
-            )
+            body = json.dumps(_compact(payload, answer_keep, evidence_keep), ensure_ascii=False)
         if len(body) > limit:
             body = _fit_skeleton(payload, limit)
         if len(body) > limit:

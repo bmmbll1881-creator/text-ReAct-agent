@@ -6,10 +6,12 @@ from datetime import UTC, datetime
 # 配置开关：默认关闭敏感信息调试模式
 SENSITIVE_DEBUG = False
 
+
 def set_sensitive_debug(flag: bool):
     """开启或关闭敏感信息调试模式（开启后会记录原始敏感信息）"""
     global SENSITIVE_DEBUG
     SENSITIVE_DEBUG = flag
+
 
 def _redact_sensitive(key, value):
     """
@@ -20,8 +22,11 @@ def _redact_sensitive(key, value):
     key_lower = key.lower()
 
     # 屏蔽敏感字段
-    if any(marker in key_lower for marker in ("api_key", "apikey", "token", "secret", "password", "authorization")):
-        return '[REDACTED]'
+    if any(
+        marker in key_lower
+        for marker in ("api_key", "apikey", "token", "secret", "password", "authorization")
+    ):
+        return "[REDACTED]"
 
     # 对嵌套结构（例如请求头）进行屏蔽
     if isinstance(value, dict):
@@ -31,12 +36,12 @@ def _redact_sensitive(key, value):
         return type(value)(redacted)
 
     # 处理文件内容
-    if 'content' in key_lower or 'file' in key_lower:
+    if "content" in key_lower or "file" in key_lower:
         if SENSITIVE_DEBUG:
             return value
         # 计算长度和哈希摘要
         if isinstance(value, str):
-            content = value.encode('utf-8')
+            content = value.encode("utf-8")
         elif isinstance(value, bytes):
             content = value
         else:
@@ -47,6 +52,7 @@ def _redact_sensitive(key, value):
 
     # 其他情况原样返回
     return value
+
 
 def log_event(event_type: str, session_id: str, step: str | None = None, **extra):
     """
@@ -64,7 +70,6 @@ def log_event(event_type: str, session_id: str, step: str | None = None, **extra
         "session_id": session_id,
         "step": step,
     }
-
 
     # 处理额外字段，过滤并脱敏
     for key, value in extra.items():

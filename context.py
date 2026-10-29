@@ -14,22 +14,25 @@ _compressing: set[int] = set()
 # LLM 调用类型别名
 LLMCallable = Callable[[list[dict[str, str]], str | None, str, int | None], Awaitable[str]]
 
+
 def estimate_tokens(messages: list[dict]) -> int:
     """粗略估算消息列表的 token 数：按字符数除以 4 估算。"""
     return len(str(messages)) // 4
+
 
 def should_compress(messages: list[dict], limit: int) -> bool:
     """判断是否需要压缩：估算 token 超过限制且消息数大于 4。"""
     return estimate_tokens(messages) > limit and len(messages) > 4
 
+
 async def compress_conversation(
-        messages: list[dict],
-        llm_call: LLMCallable,
-        system_msg: str,
-        initial_task: str,
-        keep_recent: int = config.context_keep_recent_messages,
-        session_id: str = "",
-        step: int | None = None,
+    messages: list[dict],
+    llm_call: LLMCallable,
+    system_msg: str,
+    initial_task: str,
+    keep_recent: int = config.context_keep_recent_messages,
+    session_id: str = "",
+    step: int | None = None,
 ) -> list[dict]:
     """压缩对话历史，生成摘要并保留最近的消息。
     参数：
@@ -66,14 +69,14 @@ async def compress_conversation(
 
         # 较早消息
         early_messages = [
-            msg for msg in to_condense
+            msg
+            for msg in to_condense
             if msg.get("role") != "system"
-               and not (msg.get("role") == "user"
-                        and msg.get("content") == initial_task)
+            and not (msg.get("role") == "user" and msg.get("content") == initial_task)
         ]
 
         if not early_messages:
-            return messages # 窗口外只有系统提示/初始任务，无可浓缩内容
+            return messages  # 窗口外只有系统提示/初始任务，无可浓缩内容
 
         # 构造压缩提示
         conversation_text = ""
@@ -95,7 +98,9 @@ async def compress_conversation(
         )
 
         # 调用 LLM 生成摘要
-        summary_skill_prompt = "你是助手，需要根据用户目标、已读文件、已写文件和对话历史，生成一个结构化的摘要。"
+        summary_skill_prompt = (
+            "你是助手，需要根据用户目标、已读文件、已写文件和对话历史，生成一个结构化的摘要。"
+        )
         summary_messages = [{"role": "user", "content": summary_prompt}]
         try:
             summary = await llm_call(summary_messages, summary_skill_prompt, session_id, step)
@@ -110,15 +115,16 @@ async def compress_conversation(
         new_messages = []
         if system_msg:
             new_messages.append({"role": "system", "content": system_msg})
-        else :
+        else:
             # 如果没有系统消息，则使用原始系统消息的第一条
             if system_msgs:
                 new_messages.append(system_msgs[0])
         new_messages.append({"role": "user", "content": initial_task})
-        new_messages.append({"role": "assistant", "content": f"Summary of earlier conversation:\n{summary}"})
+        new_messages.append(
+            {"role": "assistant", "content": f"Summary of earlier conversation:\n{summary}"}
+        )
         new_messages.extend(recent_messages)
         return new_messages
 
     finally:
         _compressing.discard(key)
-

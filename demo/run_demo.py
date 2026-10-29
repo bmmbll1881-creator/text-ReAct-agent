@@ -1,4 +1,5 @@
 """Run a complete deterministic Agent flow in a temporary workspace."""
+
 from __future__ import annotations
 
 import asyncio
@@ -44,12 +45,14 @@ class EventLog:
         try:
             self.entries.append({"seq": seq, "event": event, **data})
         except Exception as exc:  # observer must be best-effort
-            self.entries.append({
-                "seq": seq,
-                "event": "observer_error",
-                "original_event": event,
-                "error": repr(exc),
-            })
+            self.entries.append(
+                {
+                    "seq": seq,
+                    "event": "observer_error",
+                    "original_event": event,
+                    "error": repr(exc),
+                }
+            )
 
 
 @contextmanager

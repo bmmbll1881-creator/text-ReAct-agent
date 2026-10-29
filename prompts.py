@@ -93,17 +93,12 @@ def build_system_prompt() -> str:
     Returns:
         完整的系统提示词文本；工具清单与知识库规则随注册表变化。
     """
-    tool_list = "\n".join(
-        _describe_tool(name, meta) for name, meta in TOOL_REGISTRY.items()
-    )
+    tool_list = "\n".join(_describe_tool(name, meta) for name, meta in TOOL_REGISTRY.items())
     knowledge_rules = (
-        _KNOWLEDGE_RULES.replace("{library_hint}", _library_hint())
-        if MCP_TOOL_SPECS
-        else ""
+        _KNOWLEDGE_RULES.replace("{library_hint}", _library_hint()) if MCP_TOOL_SPECS else ""
     )
     return (
-        _PROMPT_TEMPLATE
-        .replace("{tool_list}", tool_list)
+        _PROMPT_TEMPLATE.replace("{tool_list}", tool_list)
         .replace("{knowledge_rules}", knowledge_rules)
         .strip()
     )

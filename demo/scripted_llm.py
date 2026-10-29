@@ -1,4 +1,5 @@
 """Deterministic ReAct replies for offline demos and evaluations."""
+
 from __future__ import annotations
 
 import json
@@ -59,19 +60,24 @@ class ScriptedLLM:
         if "追加" in task or "append" in task.lower():
             content = self._extract_append_content(task)
             return self._maybe_finish(
-                actions, "write_file",
+                actions,
+                "write_file",
                 {"path": path, "content": content, "mode": "a"},
                 "追加实验日志。",
             )
         if any(word in task for word in ("创建", "写入", "生成", "写", "create", "write")):
             content = self._extract_write_content(task)
             return self._maybe_finish(
-                actions, "write_file",
+                actions,
+                "write_file",
                 {"path": path, "content": content, "mode": "w"},
                 "写入目标文件。",
             )
         return self._maybe_finish(
-            actions, "read_file", {"path": path}, "读取指定文件。",
+            actions,
+            "read_file",
+            {"path": path},
+            "读取指定文件。",
         )
 
     # --- task / history parsing -------------------------------------------------
@@ -140,9 +146,15 @@ class ScriptedLLM:
         model = _extract_model(config_obs) or "实验模型"
         result = _extract_percent(results_obs) or "结果详见实验记录"
         content = f"实验模型：{model}\n关键结果：{result}\n"
-        return self._action("整理结果并写入摘要。", "write_file", {
-            "path": summary_path, "content": content, "mode": "w",
-        })
+        return self._action(
+            "整理结果并写入摘要。",
+            "write_file",
+            {
+                "path": summary_path,
+                "content": content,
+                "mode": "w",
+            },
+        )
 
     def _maybe_finish(
         self,
@@ -164,7 +176,7 @@ class ScriptedLLM:
     @staticmethod
     def _extract_path(task: str) -> str:
         for match in _PATH_RE.finditer(task):
-            window = task[max(0, match.start() - 12):match.start()]
+            window = task[max(0, match.start() - 12) : match.start()]
             if "://" in window:
                 continue
             return match.group(0)
@@ -215,11 +227,12 @@ class ScriptedLLM:
 
 # --- helpers -------------------------------------------------------------------
 
+
 def _parse_action_input(turn: str) -> dict[str, Any] | None:
     match = _ACTION_INPUT_RE.search(turn)
     if not match:
         return None
-    rest = turn[match.end():].lstrip()
+    rest = turn[match.end() :].lstrip()
     try:
         obj, _ = json.JSONDecoder().raw_decode(rest)
     except json.JSONDecodeError:

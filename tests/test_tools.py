@@ -12,7 +12,9 @@ from tools import (
 
 def test_writes_reads_and_appends_in_workspace(workspace):
     execute_tool_from_dict("write_file", {"path": "nested/note.txt", "content": "first"})
-    execute_tool_from_dict("write_file", {"path": "nested/note.txt", "content": " second", "mode": "a"})
+    execute_tool_from_dict(
+        "write_file", {"path": "nested/note.txt", "content": " second", "mode": "a"}
+    )
 
     assert execute_tool_from_dict("read_file", {"path": "nested/note.txt"}) == "first second"
     assert (workspace / "nested" / "note.txt").exists()
@@ -25,13 +27,19 @@ def test_rejects_unsafe_or_unsupported_path(workspace, path):
 
 
 def test_read_truncates_content_over_limit(workspace):
-    execute_tool_from_dict("write_file", {"path": "large.txt", "content": "a" * (MAX_READ_CHARS + 1)})
+    execute_tool_from_dict(
+        "write_file", {"path": "large.txt", "content": "a" * (MAX_READ_CHARS + 1)}
+    )
 
-    assert execute_tool_from_dict("read_file", {"path": "large.txt"}).startswith("a" * MAX_READ_CHARS)
+    assert execute_tool_from_dict("read_file", {"path": "large.txt"}).startswith(
+        "a" * MAX_READ_CHARS
+    )
 
 
 def test_write_truncates_content_over_limit(workspace):
-    execute_tool_from_dict("write_file", {"path": "large.txt", "content": "a" * (MAX_WRITE_CHARS + 1)})
+    execute_tool_from_dict(
+        "write_file", {"path": "large.txt", "content": "a" * (MAX_WRITE_CHARS + 1)}
+    )
     assert (workspace / "large.txt").read_text(encoding="utf-8") == "a" * MAX_WRITE_CHARS
 
 

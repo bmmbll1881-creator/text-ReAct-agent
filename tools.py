@@ -18,13 +18,17 @@ from logger import log_event
 
 WORK_SPACE = WORKSPACE
 
+
 class ReadFileInput(BaseModel):
     """读取文件内容的输入参数。"""
+
     path: str = Field(..., description="相对文件路径")
     model_config = ConfigDict(extra="forbid")
 
+
 class WriteFileInput(BaseModel):
     """写入文件内容的输入参数。"""
+
     path: str = Field(..., description="相对文件路径")
     content: str = Field(..., description="要写入的内容")
     mode: Literal["w", "a"] = Field("w", description="w 覆盖，a 追加")
@@ -37,11 +41,13 @@ class KnowledgeSearchInput(BaseModel):
     ``knowledge_base`` 不枚举具体取值：别名由 RAG 侧配置（RAG_KB_ALIASES）决定，
     写死在 Agent 里会在换知识库时失效。传错时服务端会报错并列出可用知识库。
     """
+
     question: str = Field(..., min_length=1, description="需要从知识库回答的问题")
     knowledge_base: str | None = Field(
         None, description="知识库别名、名称或 ID；缺省使用服务端默认知识库"
     )
     model_config = ConfigDict(extra="forbid")
+
 
 def safe_path(relative_path: str) -> Path:
     """解析相对路径，并拒绝工作目录外的访问。"""
@@ -61,9 +67,11 @@ def safe_path(relative_path: str) -> Path:
 
     return path
 
+
 @lru_cache(maxsize=32)
 def _read_file_cached(resolved_path_str: str) -> str:
     return Path(resolved_path_str).read_text(encoding="utf-8")
+
 
 def _read_file(inp: ReadFileInput) -> str:
     """读取白名单文件；内容过长时仅返回前 20,000 个字符。"""
@@ -73,8 +81,14 @@ def _read_file(inp: ReadFileInput) -> str:
 
     content = _read_file_cached(str(path))
     if len(content) > MAX_READ_CHARS:
-        log_event("tool_content_truncated", "tool", tool="read_file", path=inp.path,
-                  original_length=len(content), limit=MAX_READ_CHARS)
+        log_event(
+            "tool_content_truncated",
+            "tool",
+            tool="read_file",
+            path=inp.path,
+            original_length=len(content),
+            limit=MAX_READ_CHARS,
+        )
         return content[:MAX_READ_CHARS] + f"\n文件内容过长，仅返回前 {MAX_READ_CHARS} 个字符"
     return content
 
@@ -86,8 +100,14 @@ def _write_file(inp: WriteFileInput) -> str:
     mode = inp.mode
 
     if len(content) > MAX_WRITE_CHARS:
-        log_event("tool_content_truncated", "tool", tool="write_file", path=inp.path,
-                  original_length=len(content), limit=MAX_WRITE_CHARS)
+        log_event(
+            "tool_content_truncated",
+            "tool",
+            tool="write_file",
+            path=inp.path,
+            original_length=len(content),
+            limit=MAX_WRITE_CHARS,
+        )
         content = content[:MAX_WRITE_CHARS]
 
     # 自动创建父目录，保证嵌套相对路径可以直接使用。
@@ -95,7 +115,7 @@ def _write_file(inp: WriteFileInput) -> str:
     with path.open(mode=mode, encoding="utf-8") as file:
         file.write(content)
 
-    _read_file_cached.cache_clear() # 写操作后清空读缓存
+    _read_file_cached.cache_clear()  # 写操作后清空读缓存
     return f"已向 {path.relative_to(WORK_SPACE)} 写入 {len(content)} 个字符"
 
 
@@ -157,14 +177,13 @@ def execute_tool(tool_name: str, validated_input: BaseModel) -> str:
     if not isinstance(validated_input, tool["model"]):
         raise TypeError(f"输入类型错误：{type(validated_input)} 不是 {tool['model']}")
     func = tool["func"]
-    return func(validated_input) # type: ignore
+    return func(validated_input)  # type: ignore
+
 
 def execute_tool_from_dict(tool_name: str, raw: dict) -> str:
     """按工具名与原始字典校验入参后执行本地工具。"""
     if tool_name not in TOOL_REGISTRY:
         raise ValueError(f"未知工具：{tool_name}；可用工具：{available_tools()}")
     model_cls = TOOL_REGISTRY[tool_name]["model"]
-    validated = model_cls.model_validate(raw)   # Pydantic v2
+    validated = model_cls.model_validate(raw)  # Pydantic v2
     return execute_tool(tool_name, validated)
-
-

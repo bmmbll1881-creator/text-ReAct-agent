@@ -187,11 +187,13 @@ async def probe_contract(client: RagMcpClient, cases: list[Case]) -> list[Check]
 
     health = await client.call_tool("rag_health", {}, timeout=30)
     ready = [kb["name"] for kb in health.get("knowledge_bases", []) if kb.get("ready")]
-    checks.append(Check(
-        "rag_health 报告知识库就绪",
-        len(ready) >= 2,
-        f"data_dir={health.get('data_dir')} ready={ready}",
-    ))
+    checks.append(
+        Check(
+            "rag_health 报告知识库就绪",
+            len(ready) >= 2,
+            f"data_dir={health.get('data_dir')} ready={ready}",
+        )
+    )
 
     first_run_id: str | None = None
     for case in cases:
@@ -227,11 +229,13 @@ async def probe_contract(client: RagMcpClient, cases: list[Case]) -> list[Check]
     if first_run_id:
         detail = await client.call_tool("rag_run_detail", {"run_id": first_run_id}, timeout=30)
         stages = [trace["stage"] for trace in detail.get("traces", [])]
-        checks.append(Check(
-            "run_id 可回查完整 Trace",
-            "answer_verification" in stages,
-            f"stages={stages}",
-        ))
+        checks.append(
+            Check(
+                "run_id 可回查完整 Trace",
+                "answer_verification" in stages,
+                f"stages={stages}",
+            )
+        )
     return checks
 
 
@@ -273,37 +277,47 @@ def _case_checks(case: Case, answer: str, events: EventLog, index: int) -> list[
     used = [item.get("knowledge_base") for item in events.knowledge]
     label = f"任务{index}"
 
-    checks.append(Check(
-        f"{label} 命中了预期知识库与状态",
-        case.knowledge_base in used
-        and any(status == case.expected_route for status in statuses),
-        f"knowledge_base={used} status={statuses}",
-    ))
+    checks.append(
+        Check(
+            f"{label} 命中了预期知识库与状态",
+            case.knowledge_base in used
+            and any(status == case.expected_route for status in statuses),
+            f"knowledge_base={used} status={statuses}",
+        )
+    )
 
     if case.expected_route == "success":
-        checks.append(Check(
-            f"{label} 最终答案保留引用",
-            bool(_CITATION_RE.search(answer)),
-            f"answer={answer!r}",
-        ))
+        checks.append(
+            Check(
+                f"{label} 最终答案保留引用",
+                bool(_CITATION_RE.search(answer)),
+                f"answer={answer!r}",
+            )
+        )
     else:
-        checks.append(Check(
-            f"{label} 拒答后未编造引用或具体数值",
-            not _CITATION_RE.search(answer) and not re.search(r"\d+(?:\.\d+)?\s*%", answer),
-            f"answer={answer!r}",
-        ))
-        checks.append(Check(
-            f"{label} 明确说明证据不足",
-            any(word in answer for word in _EVIDENCE_WORDS),
-            f"answer={answer!r}",
-        ))
+        checks.append(
+            Check(
+                f"{label} 拒答后未编造引用或具体数值",
+                not _CITATION_RE.search(answer) and not re.search(r"\d+(?:\.\d+)?\s*%", answer),
+                f"answer={answer!r}",
+            )
+        )
+        checks.append(
+            Check(
+                f"{label} 明确说明证据不足",
+                any(word in answer for word in _EVIDENCE_WORDS),
+                f"answer={answer!r}",
+            )
+        )
 
     if case.id == "contract_renewal_trap":
-        checks.append(Check(
-            "陷阱用例按否定事实表述（未约定，而非约定）",
-            "未约定" in answer or "没有约定" in answer,
-            f"answer={answer!r}",
-        ))
+        checks.append(
+            Check(
+                "陷阱用例按否定事实表述（未约定，而非约定）",
+                "未约定" in answer or "没有约定" in answer,
+                f"answer={answer!r}",
+            )
+        )
     return checks
 
 
@@ -329,19 +343,24 @@ async def run_agent_scenarios(cases: list[Case]) -> list[Check]:
         answer, events = await run_task(HYBRID_TASK, workspace)
         print(f"\n[任务5] {HYBRID_TASK}\n回答：{answer}")
         read_calls = [
-            entry for entry in events.entries
+            entry
+            for entry in events.entries
             if entry.get("event") == "tool_call" and entry.get("tool_name") == "read_file"
         ]
-        checks.append(Check(
-            "任务5 同时用了 read_file 与 knowledge_search",
-            bool(read_calls) and bool(events.knowledge),
-            f"read_file={len(read_calls)} knowledge={len(events.knowledge)}",
-        ))
-        checks.append(Check(
-            "任务5 未把本地材料当作知识库证据",
-            "[S1]" not in answer or bool(events.knowledge),
-            f"answer={answer!r}",
-        ))
+        checks.append(
+            Check(
+                "任务5 同时用了 read_file 与 knowledge_search",
+                bool(read_calls) and bool(events.knowledge),
+                f"read_file={len(read_calls)} knowledge={len(events.knowledge)}",
+            )
+        )
+        checks.append(
+            Check(
+                "任务5 未把本地材料当作知识库证据",
+                "[S1]" not in answer or bool(events.knowledge),
+                f"answer={answer!r}",
+            )
+        )
     return checks
 
 

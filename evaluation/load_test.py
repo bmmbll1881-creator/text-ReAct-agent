@@ -1,4 +1,5 @@
 """Process-isolated load test for the deterministic Agent main loop."""
+
 from __future__ import annotations
 
 import argparse
@@ -27,8 +28,15 @@ def _run_one(index: int) -> float:
             "Final Answer: done",
         ]
         started = time.perf_counter()
-        asyncio.run(run_agent("create result.txt", session_id, llm_call=ScriptedLLM(replies=replies),
-                              budget=MemoryBudget(session_id, 2), max_steps=2))
+        asyncio.run(
+            run_agent(
+                "create result.txt",
+                session_id,
+                llm_call=ScriptedLLM(replies=replies),
+                budget=MemoryBudget(session_id, 2),
+                max_steps=2,
+            )
+        )
         elapsed = (time.perf_counter() - started) * 1000
         if (workspace / "result.txt").read_text(encoding="utf-8") != "ok":
             raise AssertionError("load task produced incorrect output")

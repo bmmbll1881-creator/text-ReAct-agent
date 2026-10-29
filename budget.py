@@ -1,4 +1,5 @@
 """本地与 Redis 双层步骤预算。"""
+
 import json
 import os
 
@@ -9,8 +10,10 @@ from redis.exceptions import LockNotOwnedError
 class BudgetExceeded(RuntimeError):
     """执行步骤超过预算时抛出。"""
 
+
 class SessionBusyError(RuntimeError):
     """会话正在被其他进程占用时抛出。"""
+
 
 class LocalBudget:
     """限制单个进程内的执行步数。"""
@@ -30,6 +33,7 @@ class LocalBudget:
 
 class RedisBudget:
     """限制同一会话在多个进程或实例中的总步数。"""
+
     # Redis 键的过期时间（秒）
     TTL_SECONDS = 3600
 
@@ -87,7 +91,7 @@ class StepBudget:
         self.redis.redis_client.set(
             self.history_key,
             json.dumps(clean_messages, ensure_ascii=False),
-            ex=self.redis.TTL_SECONDS, # 与预算 TTL 一致
+            ex=self.redis.TTL_SECONDS,  # 与预算 TTL 一致
         )
 
     def clear_budget(self):
@@ -130,7 +134,7 @@ class StepBudget:
             try:
                 self._lock.release()
             except LockNotOwnedError:
-                pass # 锁可能已过期被自动释放，忽略此异常
+                pass  # 锁可能已过期被自动释放，忽略此异常
             finally:
                 self._lock = None
 

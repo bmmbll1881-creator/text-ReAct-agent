@@ -63,7 +63,9 @@ class FakeBudget:
         pass
 
 
-async def _run_with_backend(backend, *, final: str = "Final Answer: done") -> tuple[str, list, list]:
+async def _run_with_backend(
+    backend, *, final: str = "Final Answer: done"
+) -> tuple[str, list, list]:
     """用给定 backend 跑一次「先查知识库再作答」的任务。"""
     knowledge_backend.set_backend(backend)
     observations: list[str] = []

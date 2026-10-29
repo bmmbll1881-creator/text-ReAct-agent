@@ -12,7 +12,7 @@ def test_parses_final_answer_and_thought():
 
 def test_parses_nested_json_and_braces_in_string():
     result = parse_response(
-        'Thought: write\nAction: write_file\n'
+        "Thought: write\nAction: write_file\n"
         'Action Input: {"path": "note.txt", "content": "{hello}"}'
     )
 
@@ -26,8 +26,8 @@ def test_parses_nested_json_and_braces_in_string():
         ("Thought: x", "Action"),
         ("Action: read_file", "Input"),
         ("Action: read_file\nAction Input: {bad}", "Input"),
-        ("Action: read_file\nAction Input: prefix {\"path\": \"x.txt\"}", "Input"),
-        ("Action: read_file\nAction Input: {\"path\": \"x.txt\"} extra", "Input"),
+        ('Action: read_file\nAction Input: prefix {"path": "x.txt"}', "Input"),
+        ('Action: read_file\nAction Input: {"path": "x.txt"} extra', "Input"),
     ],
 )
 def test_rejects_invalid_protocol(response, expected):
@@ -35,6 +35,6 @@ def test_rejects_invalid_protocol(response, expected):
 
 
 def test_accepts_code_fences():
-    result = parse_response("```\nAction: read_file\nAction Input: {\"path\": \"x.txt\"}\n```")
+    result = parse_response('```\nAction: read_file\nAction Input: {"path": "x.txt"}\n```')
 
     assert result.action_input == {"path": "x.txt"}

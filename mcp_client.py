@@ -111,12 +111,14 @@ class RagMcpClient:
         后者会把 API Key 等敏感变量带进子进程。
         """
         env = get_default_environment()
-        env.update({
-            "PYTHONPATH": str(self._project / "src"),
-            "RAG_DATA_DIR": str(self._data_dir),
-            "PYTHONIOENCODING": "utf-8",
-            "PYTHONUNBUFFERED": "1",
-        })
+        env.update(
+            {
+                "PYTHONPATH": str(self._project / "src"),
+                "RAG_DATA_DIR": str(self._data_dir),
+                "PYTHONIOENCODING": "utf-8",
+                "PYTHONUNBUFFERED": "1",
+            }
+        )
         if self._kb_aliases:
             env["RAG_KB_ALIASES"] = self._kb_aliases
         if self._default_kb:
@@ -140,9 +142,7 @@ class RagMcpClient:
         stack = AsyncExitStack()
         try:
             async with asyncio.timeout(self._startup_timeout):
-                read, write = await stack.enter_async_context(
-                    stdio_client(self._server_params())
-                )
+                read, write = await stack.enter_async_context(stdio_client(self._server_params()))
                 session = await stack.enter_async_context(ClientSession(read, write))
                 await session.initialize()
                 listed = await session.list_tools()
@@ -159,9 +159,7 @@ class RagMcpClient:
         missing = [name for name in REQUIRED_TOOLS if name not in names]
         if missing:
             await self._discard_stack(stack)
-            raise McpStartupError(
-                f"RAG MCP 服务缺少工具 {missing}，实际暴露：{list(names)}"
-            )
+            raise McpStartupError(f"RAG MCP 服务缺少工具 {missing}，实际暴露：{list(names)}")
 
         self._stack = stack
         self._session = session
@@ -197,9 +195,7 @@ class RagMcpClient:
         """
         if self._session is None:
             raise McpStartupError("MCP 客户端尚未启动，请先 await start()")
-        result = await asyncio.wait_for(
-            self._session.call_tool(name, arguments), timeout
-        )
+        result = await asyncio.wait_for(self._session.call_tool(name, arguments), timeout)
         if getattr(result, "isError", False):
             detail = _extract_text(result) or "unknown error"
             raise McpToolError(f"{name} 调用失败：{detail}")
