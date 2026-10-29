@@ -1,3 +1,37 @@
+# text-ReAct-agent 项目描述与依赖管理
+# 这是一个“应用类”项目（扁平模块布局，非可构建包），用 [tool.uv] package=false 告知 uv 只管理依赖。
+[tool.uv]
+package = false
+
+[project]
+name = "text-react-agent"
+version = "0.1.0"
+description = "Text ReAct Agent with Evidence Reflective RAG integrated via MCP"
+requires-python = ">=3.11"
+dependencies = [
+    "python-dotenv==1.0.1",
+    "redis==5.2.1",
+    "pydantic==2.14.1",
+    "httpx==0.28.1",
+    "tenacity==9.0.0",
+    "fastapi==0.115.6",
+    "starlette==0.41.3",
+    "uvicorn[standard]==0.34.0",
+    "mcp>=1.0,<2.0",
+    # mcp 默认会拉 sse-starlette 3.x，从而把 starlette 顶到 1.x，与 fastapi 0.115 的 <0.42 约束冲突。
+    # 这里显式锁定 <3 以与 RAG 端的 SSE 实现保持一致。
+    "sse-starlette<3",
+]
+
+[dependency-groups]
+# 开发/测试/静态检查依赖。安装方式：uv sync --group dev
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.25.3",
+    "pytest-cov==6.0.0",
+    "ruff==0.16.6",
+]
+
 [tool.ruff]
 target-version = "py313"
 line-length = 100

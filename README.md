@@ -25,15 +25,16 @@
 
 ## 安装与配置
 
-需要 Python 3.11+（`asyncio.timeout` 等 API）。安装项目和测试依赖：
+需要 Python 3.11+（`asyncio.timeout` 等 API）。仓库使用 uv 管理依赖（`pyproject.toml` 为唯一来源）：
 
 ```powershell
+# 开发环境（含运行时 + 测试/静态检查依赖，推荐）
+uv sync --group dev
+# 传统 pip 方式（requirements.txt 为冻结快照，与 pyproject 保持一致）
 pip install -r requirements.txt
-# 或使用 uv（本仓库开发环境即 uv 管理的 venv）
-uv pip install -r requirements.txt
 ```
 
-复制 `.env.example` 为 `.env`，配置 `CHAT_URL`、`DEEPSEEK_API_KEY` 和工作区等参数。在线 API/Agent 模式需要可访问的 Redis 服务；离线 Demo 和确定性评测不需要启动 Redis，也不需要配置或访问外部 LLM。
+复制 `.env.example` 为 `.env`，配置 `CHAT_URL`、`DEEPSEEK_API_KEY` 和工作区等参数。启用 RAG 知识库后端需在 `.env` 中保留 `.env.example` 里的 `RAG_MCP_*` 配置块并将 `RAG_MCP_ENABLED` 设为 `true`；留空或置 `false` 时 Agent 仅加载本地文件工具（便于单独调试）。在线 API/Agent 模式需要可访问的 Redis 服务；离线 Demo 和确定性评测不需要启动 Redis，也不需要配置或访问外部 LLM。
 
 ## 离线 Demo
 
