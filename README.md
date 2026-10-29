@@ -67,6 +67,19 @@ ReAct Agent
             → generation → verification → failure attribution
 ```
 
+每轮工具返回后的处理链：
+
+```text
+tool_output(JSON) ──> status == success ? ──是──> 答案保留 [S1] 引用
+                                  │                        │
+                                  否                        │
+                                  ▼                        │
+                   追加 [系统约束] 到历史（禁止常识补答）    │
+                                  │                        │
+                                  └──────> knowledge_result 事件（run_id / route / citations）
+                                                          └─> rag_run_detail 回查完整 Trace
+```
+
 准备知识库（在 RAG 仓库执行）：
 
 ```powershell
@@ -110,6 +123,17 @@ SSE 流会额外发送 `knowledge_result` 事件，携带 `run_id` / `route` / `
   优先裁证据条数，其次裁 answer，最后只留标量字段，保证写进历史的始终是合法 JSON。
 - **降级**：`RAG_MCP_ENABLED=false` 时工具返回 `status=disabled`；MCP 启动失败时服务仍可用，
   `GET /health` 返回 `{"status":"ok","mcp":"error: ..."}`。
+
+### 已知限制
+
+1. **抽取式答案有噪音**：RAG 的答案生成器会把证据集里所有命中 chunk 的首句拼接，
+   与问题无关的句子可能一起出现（`evidence[].score` 已暴露，供上层裁剪）。
+2. **`success` 不代表肯定**："合同未约定自动续约期限" 也是 `success`，演示时不要把
+   否定事实当成"门控失效"或"肯定回答"。
+3. **RAG 侧串行**：SQLite 单锁，`knowledge_search` 有效并发约 1~2，提高
+   `RAG_MCP_MAX_CONCURRENCY` 不会提升吞吐。
+4. **单进程部署**：`uvicorn --workers` 必须为 1，否则每个 worker 各起一个 MCP 子进程。
+5. **无鉴权**：MCP stdio 走本机管道；若改 HTTP transport 需要自行补鉴权与限流。
 
 ## 评测
 

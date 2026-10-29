@@ -449,10 +449,12 @@ RAG_MCP_MAX_OBSERVATION_CHARS=4000
 
 > **基于 MCP 的证据约束 ReAct Agent**（Python / asyncio / FastAPI / MCP / LangGraph / SQLite / SSE）
 >
-> - 以 MCP stdio 将 Evidence Reflective RAG 封装为独立知识库服务，暴露带引用问答、证据检索与运行追踪三类工具；ReAct Agent 作为 MCP Client 复用单一会话，实现进程解耦与工具协议标准化。
-> - 改造 Agent 工具执行链，使同步本地文件工具与异步 MCP 工具统一接入（协程分流 + 分工具超时 + 异常降级），30s/60s 分级超时保证单步失败不拖垮任务。
-> - 将 RAG 的四态路由（success / clarify / abstain / verification_failed）映射为 Agent 可执行语义，并在运行时注入"证据不足禁止补答"的硬约束，防止模型绕过证据门控。
-> - 构建财务报告与合同条款双知识库 Demo，覆盖带引用作答、证据不足拒答、本地文件与知识库联合推理三类任务；保留 run_id 与 Trace 以支持从 Agent 输出回溯至检索、门控、校验与失败归因。
+> - 以 MCP stdio 将 Evidence Reflective RAG 封装为独立知识库服务，暴露带引用问答、证据检索与运行追踪三类工具；ReAct Agent 作为 MCP Client 复用单一会话（AsyncExitStack 管理子进程生命周期），实现进程解耦与工具协议标准化。
+> - 改造 Agent 工具执行链，使同步文件工具与异步 MCP 工具统一接入：协程分流 + awaitable 兜底、分工具超时（本地 30s / MCP 60s）、异常与超时降级为可读 observation。
+> - 将 RAG 四态路由（success / clarify / abstain / verification_failed）映射为 Agent 语义，**在运行时把"证据不足禁止补答"的约束写进对话历史**（非提示词约定），并用单测覆盖五态约束生成。
+> - 结构化 observation 采用逐级收缩（裁证据 → 清证据 → 标量骨架）保证在 2000 字符预算内始终是合法 JSON；新增 `knowledge_result` 事件携带 run_id / route / citations，支持从 Agent 输出回溯至检索、门控、校验与失败归因。
+> - 建财务报告与合同条款双知识库 Demo：ReAct 自主选库（7 条共享用例，21 项联调断言通过），覆盖带引用作答、证据不足拒答、否定事实陷阱与本地文件联合推理。
+> - 工程化：两端测试数据统一到 `demo/cases.json`，RAG 132 项 + Agent 102 项测试通过，含真实子进程集成测试与 API lifespan 启停验证。
 
 ---
 

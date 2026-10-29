@@ -41,7 +41,7 @@ RAG Graph：retrieval → evidence gate → reflection → generation
 | 1 | Agent 侧异步工具链（同步/异步工具混跑） | ✅ 完成 | Agent 82 passed；`demo.run_demo` 行为不变 |
 | 2 | MCP Client + 最小闭环 | ✅ 完成 | 联合 Demo 13/13 通过（真实子进程 + 真实 LLM） |
 | 3 | 约束强化与可观测（abstain 硬约束、SSE 事件、lifespan） | ✅ 完成 | 102 passed；真实 MCP 下 health=ready、可回查 run_id |
-| 4 | 联合 Demo、集成测试、文档与简历 | ⬜ 待开始 | — |
+| 4 | 联合 Demo、集成测试、文档与简历 | ✅ 完成 | 21/21 联调断言；两端测试数据统一到 `demo/cases.json` |
 
 ---
 
@@ -128,10 +128,13 @@ RAG Graph：retrieval → evidence gate → reflection → generation
 
 ### P2 · 收尾
 
-11. 5 个演示场景脚本化（含"自动续约"陷阱场景）
-12. README：架构图、启动命令、已知限制 5 条
-13. `.env.example` 补 `RAG_MCP_*` 与 `RAG_KB_ALIASES`
-14. 简历措辞按实测数据核对
+| # | 事项 | 状态 |
+|---|---|---|
+| 11 | 5 个演示场景脚本化（含"自动续约"陷阱场景） | ✅ |
+| 12 | README：架构图、事件/约束流程图、已知限制 5 条 | ✅ |
+| 13 | `.env.example` 补 `RAG_MCP_*` 与 `RAG_KB_ALIASES` | ✅（A2 完成） |
+| 14 | 简历措辞按实测数据核对 | ✅ |
+| 15 | 两端测试数据统一到 `demo/cases.json` | ✅ |
 
 ### 已知限制（待写入 README）
 
@@ -253,3 +256,55 @@ python -m demo.run_integrated_demo             13/13 通过
 **联调回归中的一个坑**：约束追加到 observation 后，Demo 原先「解析 observation 前缀 JSON」的采集逻辑失效，
 两次 FAIL 其实是**检查器坏了**而不是行为坏了。改为消费 `knowledge_result` 事件后恢复 13/13——
 这也顺带证明该事件对可观测性的必要性。
+
+### 2026-10-29 · A5 P2 完成：测试数据统一、文档收尾
+
+**测试数据统一（核心改动）**
+
+新增 `evidence-reflective-trace-rag/demo/cases.json` + `demo/cases.py`，作为**两端唯一数据源**：
+
+```json
+{
+  "documents": [{"alias": "financial_report", "name": "财务报告", "filename": "financial_report.md"}, ...],
+  "cases": [
+    {"id": "finance_revenue", "knowledge_base": "financial_report", "question": "...",
+     "expected_route": "success", "expected_answer": "... [S1]", "expected_citations": ["S1"],
+     "agent_task": "..."},
+    {"id": "contract_penalty_ratio", "expected_route": "abstain", "expected_failure_type": "insufficient_coverage", ...}
+  ]
+}
+```
+
+消费方收敛为 4 处，全部读同一份：
+
+| 消费方 | 用途 |
+|---|---|
+| `demo/seed_demo.py` | 文档定义（`DOCUMENTS` 由 cases.json 生成） |
+| `demo/run_demo.py` | 演示问题列表（原硬编码 6 条 → 改为读取） |
+| `tests/test_demo.py` | 预期路由/答案断言 + **答案事实回溯校验**（答案必须能在源文档中原样找到） |
+| Agent `demo/run_integrated_demo.py` + `tests/test_mcp_bridge.py` | 联调用例与真集成断言 |
+
+用例从 6 条扩到 7 条，新增 `contract_penalty_ratio`（拒答正例）；新增 `contract_renewal_trap` 的 `note` 字段，明确"route=success 但答案是否定事实"的陷阱语义。
+
+**其它改动**
+
+- `demo/run_integrated_demo.py`：改为数据驱动（`--cases` 可指定路径）；A 段遍历全部 7 条用例，B 段跑 5 个场景（财务、合同成功、拒答、陷阱、本地文件联合），断言由用例预期生成。
+- `README.md`：补充事件/约束流程图与「已知限制」5 条。
+- RAG `README.md`：说明 `demo/cases.json` 是数据单一来源。
+- 方案文档第 11 节简历措辞按实测数据重写。
+
+**验证（本轮全量）**
+
+```
+RAG：   pytest -q                     132 passed
+        demo/seed_demo + run_demo      7 条用例全部按预期路由
+Agent： pytest -q                     102 passed, 1 skipped
+        pytest -q + RAG_INTEGRATION=1  1 passed（真子进程 + 共享用例断言）
+        ruff check .                   仅剩 demo/ 下 6 条历史告警
+        demo.run_demo                  本地工具链路不变
+        demo.run_integrated_demo       21/21 通过（9 项链路自检 + 12 项端到端）
+```
+
+**统一数据后的一个直接收益**：A 段自检从"抽查 4 条"变成"覆盖全部 7 条用例"，
+其中 `contract_termination` 这类多 chunk 命中会返回 3 行答案——断言改为"预期事实片段包含在答案中 + 引用 ID 全部出现在答案里"，
+既能容忍抽取式噪音，又能抓住"事实错位"和"引用丢失"两类真问题。

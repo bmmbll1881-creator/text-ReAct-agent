@@ -253,10 +253,22 @@ def test_lifespan_degrades_when_mcp_startup_fails(monkeypatch):
     os.getenv("RAG_INTEGRATION") != "1",
     reason="设置 RAG_INTEGRATION=1 才启动真实 MCP 子进程",
 )
-def test_real_mcp_knowledge_search_roundtrip():
-    """真实 stdio 子进程：knowledge_search 返回 success 与 [S1]。"""
+def test_real_mcp_matches_shared_case_file():
+    """真实 stdio 子进程 + 两端共用的 cases.json：答案事实与引用必须一致。"""
+    import re
+    from pathlib import Path
+
     import config as settings
     from mcp_client import client_from_config
+
+    project = settings.RAG_MCP_PROJECT
+    assert project is not None
+    cases_path = Path(project) / "demo" / "cases.json"
+    if not cases_path.exists():
+        pytest.skip(f"缺少共用用例文件：{cases_path}")
+
+    payload_cases = json.loads(cases_path.read_text(encoding="utf-8"))["cases"]
+    case = next(item for item in payload_cases if item["id"] == "finance_revenue")
 
     client = client_from_config(settings.config)
 
@@ -265,7 +277,7 @@ def test_real_mcp_knowledge_search_roundtrip():
         try:
             return await client.call_tool(
                 "knowledge_search",
-                {"question": "2025年第三季度营业收入是多少？", "knowledge_base": "financial_report"},
+                {"question": case["question"], "knowledge_base": case["knowledge_base"]},
                 timeout=settings.RAG_MCP_TOOL_TIMEOUT,
             )
         finally:
@@ -273,6 +285,7 @@ def test_real_mcp_knowledge_search_roundtrip():
 
     payload = asyncio.run(call())
 
-    assert payload["status"] == "success"
-    assert "[S1]" in payload["answer"]
-    assert json.dumps(payload["citations"]) == '["S1"]'
+    assert payload["status"] == case["expected_route"]
+    expected_fragment = re.sub(r"\s*\[S\d+\]", "", case["expected_answer"]).strip()
+    assert expected_fragment in re.sub(r"\s*\[S\d+\]", "", payload["answer"]).strip()
+    assert payload["citations"] == case["expected_citations"]
