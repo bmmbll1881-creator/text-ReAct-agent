@@ -24,7 +24,7 @@ from context import compress_conversation, should_compress
 from logger import log_event
 from parser import parse_response
 from prompts import build_system_prompt
-from tool_dispatch import execute_tool_async, format_observation
+from tool_dispatch import constraint_for, execute_tool_async, format_observation
 from tools import LOCAL_TOOL_REGISTRY, TOOL_REGISTRY
 
 EventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -381,8 +381,21 @@ async def _execute_action(
         return observation
 
     observation = format_observation(raw_output)
+    # 非 success 状态把约束写进历史，避免模型"顺手"用常识补齐证据缺口
+    constraint = constraint_for(raw_output)
+    if constraint:
+        observation = f"{observation}\n\n{constraint}"
     await emit("tool_call", {"tool_name": tool_name, "tool_input": tool_input})
     await emit("tool_output", {"output": observation, "duration_ms": _elapsed_ms(started_at)})
+    if isinstance(raw_output, dict) and "status" in raw_output:
+        await emit("knowledge_result", {
+            "knowledge_base": raw_output.get("knowledge_base"),
+            "status": raw_output.get("status"),
+            "route": raw_output.get("route"),
+            "run_id": raw_output.get("run_id"),
+            "citations": raw_output.get("citations") or [],
+            "failure_type": raw_output.get("failure_type"),
+        })
     return observation
 
 

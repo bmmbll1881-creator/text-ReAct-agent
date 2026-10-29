@@ -40,7 +40,7 @@ RAG Graph：retrieval → evidence gate → reflection → generation
 | 0 | RAG 侧 Agent 契约（`knowledge_search` / `rag_health`） | ✅ 完成 | RAG 124 passed；真实 stdio 四场景实测 |
 | 1 | Agent 侧异步工具链（同步/异步工具混跑） | ✅ 完成 | Agent 82 passed；`demo.run_demo` 行为不变 |
 | 2 | MCP Client + 最小闭环 | ✅ 完成 | 联合 Demo 13/13 通过（真实子进程 + 真实 LLM） |
-| 3 | 约束强化与可观测（abstain 硬约束、SSE 事件、lifespan） | ⬜ 待开始 | — |
+| 3 | 约束强化与可观测（abstain 硬约束、SSE 事件、lifespan） | ✅ 完成 | 102 passed；真实 MCP 下 health=ready、可回查 run_id |
 | 4 | 联合 Demo、集成测试、文档与简历 | ⬜ 待开始 | — |
 
 ---
@@ -118,11 +118,13 @@ RAG Graph：retrieval → evidence gate → reflection → generation
 
 ### P1 · 质量与约束
 
-6. `abstain` / `clarify` / `verification_failed` 的**代码级** reminder（不依赖提示词）
-7. `knowledge_result` SSE 事件（run_id / route / citations）
-8. `api.py` lifespan 启停 + `/health` 返回 mcp 状态
-9. 并发信号量 + `workers=1` 约束写入文档
-10. bridge 单测（Stub，7 例）+ 集成测试（1 例真起子进程）
+| # | 事项 | 状态 |
+|---|---|---|
+| 6 | `abstain` / `clarify` / `verification_failed` 的**代码级** reminder | ✅ |
+| 7 | `knowledge_result` SSE 事件（run_id / route / citations） | ✅ |
+| 8 | `api.py` lifespan 启停 + `/health` 返回 mcp 状态 | ✅ |
+| 9 | 并发信号量 + `workers=1` 约束写入文档 | ✅ |
+| 10 | bridge 单测（Stub，14 例）+ 集成测试（1 例真起子进程） | ✅ |
 
 ### P2 · 收尾
 
@@ -213,3 +215,41 @@ MCP 已连接，工具：['rag_query','rag_retrieve','rag_run_detail','knowledge
 - Agent：88 passed（原 82 + 新增 6），`ruff check` 仅剩 `demo/run_demo.py`、`demo/memory_budget.py` 的 6 条历史告警。
 - RAG：124 passed。
 - `python -m demo.run_demo` 本地工具链路行为不变。
+
+### 2026-10-29 · A4 P1 完成：约束强化与可观测
+
+**改动/新增**
+
+| 文件 | 内容 |
+|---|---|
+| `tool_dispatch.py` | 新增 `_STATUS_CONSTRAINTS` 与 `constraint_for(payload)`：abstain / clarify / verification_failed / disabled / error 五种状态的运行时约束文本，带 `run_id` |
+| `agent.py` | `_execute_action` 在非 success 时把 `[系统约束]` 追加到 observation（代码注入，不依赖提示词）；新增 `knowledge_result` 事件 |
+| `api.py` | 新增 `lifespan`：启动时按配置拉起 MCP 子进程并注入 backend，退出时逆序关闭；`/health` 返回 `{"status":"ok","mcp":"ready|disabled|error: ..."}`；MCP 启动失败降级而非整站不可用 |
+| `tests/test_mcp_bridge.py` | 新增 15 例：约束注入 3 例、状态覆盖参数化 4 例、事件 3 例、错误/超时 2 例、API 生命周期 3 例、真集成 1 例（默认 skip） |
+| `demo/run_integrated_demo.py` | 事件采集改读 `knowledge_result`，不再解析带约束尾巴的 observation 文本 |
+| `README.md` | 新增「MCP 知识库集成」与「并发与部署约束」两节 |
+
+**关键设计**
+
+- **约束是历史里的真实文本，不是提示词**：`abstain` 时下一轮 observation 末尾固定追加
+  `[系统约束] 知识库返回 abstain（证据不足）。不得基于常识或推测补充答案…（run_id=...）`。
+  联调里模型在拒答回答中主动引用了该 `run_id`，说明约束确实进了上下文。
+- **超时分级可验证**：单测同时 monkeypatch `TOOL_TIMEOUT=30` 与 `RAG_MCP_TOOL_TIMEOUT=0.01`，
+  证明 MCP 工具走的是后者。
+- **降级不掩盖**：MCP 起不来时服务仍返回 200，但 `/health` 明确 `error: ...`，不假装 ready。
+
+**验证**
+
+```
+pytest -q                                      102 passed, 1 skipped（集成用例默认跳过）
+RAG_INTEGRATION=1 pytest -k real_mcp            1 passed（真实子进程 3.66s 内完成握手+查询）
+ruff check .                                    仅剩 demo/ 下 6 条历史告警
+TestClient(api.app) 真实 MCP 启动             health={'status':'ok','mcp':'ready'}
+                                              backend=McpKnowledgeBackend
+                                              退出后 backend=NullKnowledgeBackend（无 cancel scope 报错）
+python -m demo.run_integrated_demo             13/13 通过
+```
+
+**联调回归中的一个坑**：约束追加到 observation 后，Demo 原先「解析 observation 前缀 JSON」的采集逻辑失效，
+两次 FAIL 其实是**检查器坏了**而不是行为坏了。改为消费 `knowledge_result` 事件后恢复 13/13——
+这也顺带证明该事件对可观测性的必要性。

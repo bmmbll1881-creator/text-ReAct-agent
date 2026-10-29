@@ -1,12 +1,14 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+import knowledge_backend
 from agent import SessionBusyError, run_agent
 from config import (
     EVENT_QUEUE_PUT_TIMEOUT,
@@ -14,9 +16,15 @@ from config import (
     MAX_QUEUE_SIZE,
     MAX_SESSION_ID_LENGTH,
     MAX_TASK_LENGTH,
+    RAG_MCP_ENABLED,
     SSE_KEEPALIVE_SECONDS,
 )
+from config import (
+    config as app_config,
+)
+from knowledge_backend import McpKnowledgeBackend
 from logger import log_event
+from mcp_client import client_from_config
 
 
 class TaskRequest(BaseModel):
@@ -26,12 +34,42 @@ class TaskRequest(BaseModel):
 
 _global_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RUNS)
 
-app = FastAPI(title="Text ReAct Agent")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """启动时拉起 RAG MCP 子进程，退出时关闭。
+
+    MCP 启动失败不阻断服务：文件工具仍可用，``/health`` 会报告 error。
+    """
+    app.state.mcp_status = "disabled"
+    client = None
+    if RAG_MCP_ENABLED:
+        try:
+            client = client_from_config(app_config)
+            await client.start()
+        except Exception as exc:
+            client = None
+            app.state.mcp_status = f"error: {exc}"
+            log_event("rag_mcp_startup_error", "system", error=str(exc))
+        else:
+            knowledge_backend.set_backend(McpKnowledgeBackend(client))
+            app.state.mcp_status = "ready"
+    try:
+        yield
+    finally:
+        knowledge_backend.set_backend(None)
+        if client is not None:
+            await client.close()
+
+
+app = FastAPI(title="Text ReAct Agent", lifespan=lifespan)
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    """存活与 MCP 依赖状态；``mcp`` 取值 ready / disabled / error: ...。"""
+    return {"status": "ok", "mcp": getattr(app.state, "mcp_status", "disabled")}
+
 
 
 @app.post("/invoke",

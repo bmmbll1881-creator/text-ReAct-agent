@@ -55,6 +55,62 @@ curl -N -X POST http://localhost:8000/stream -H "Content-Type: application/json"
 
 SSE 会按执行过程发送 `step_start`、`tool_call`、`tool_output`、错误/恢复事件和 `final_answer` 等事件。生产环境建议设置 `EMIT_THOUGHT=false`，避免 thought 事件泄露敏感信息。
 
+## MCP 知识库集成
+
+Agent 可把证据约束 RAG（`evidence-reflective-trace-rag`）作为 MCP 工具使用。边界是进程级的：
+
+```text
+ReAct Agent
+├── read_file / write_file        ← 本地工作区
+└── knowledge_search              ← MCP stdio 子进程
+        └── evidence-reflective-rag：retrieval → evidence gate → reflection
+            → generation → verification → failure attribution
+```
+
+准备知识库（在 RAG 仓库执行）：
+
+```powershell
+python -m demo.seed_demo --data-dir demo/data
+```
+
+配置 `.env`（完整清单见 `.env.example`）：
+
+```env
+RAG_MCP_ENABLED=true
+RAG_MCP_PYTHON=...\evidence-reflective-trace-rag\.venv\Scripts\python.exe
+RAG_MCP_PROJECT=...\evidence-reflective-trace-rag
+RAG_MCP_DATA_DIR=...\evidence-reflective-trace-rag\demo\data
+RAG_MCP_DEFAULT_KB=financial_report
+RAG_MCP_KB_ALIASES=financial_report=财务报告,contract=合同条款
+```
+
+联调（A 段不依赖 LLM，B 段需要 `DEEPSEEK_API_KEY`）：
+
+```powershell
+python -m demo.run_integrated_demo            # 链路自检 + 4 个端到端任务
+python -m demo.run_integrated_demo --offline  # 只跑链路自检
+```
+
+`knowledge_search` 返回 `status` 四态（`success` / `clarify` / `abstain` / `verification_failed`），
+只有 `success` 带 `answer` 与 `citations`。**非 success 状态会在下一轮 observation 后追加
+`[系统约束]` 文本**（由代码注入，不是提示词约定），禁止模型用常识补齐证据缺口。
+
+SSE 流会额外发送 `knowledge_result` 事件，携带 `run_id` / `route` / `citations` / `failure_type`，
+可据此调用 RAG 的 `rag_run_detail` 回查完整 Trace。
+
+### 并发与部署约束
+
+- **单进程**：`uvicorn api:app --workers 1`。每个进程会在 lifespan 中拉起一个 MCP 子进程，
+  多 worker 等于多份子进程与多份 SQLite 连接。
+- **MCP 并发**：`RAG_MCP_MAX_CONCURRENCY`（默认 2）。RAG 侧 SQLite 单锁串行，
+  提高并发只会排队，不会提升吞吐。
+- **超时分级**：本地文件工具 `TOOL_TIMEOUT`（30s），MCP 工具 `RAG_MCP_TOOL_TIMEOUT`（60s，
+  覆盖最多 2 轮检索 + 1 轮 LLM 反思）。
+- **观测体积**：`MAX_OBSERVATION_CHARS`（默认 2000）对结构化 observation 逐级收缩，
+  优先裁证据条数，其次裁 answer，最后只留标量字段，保证写进历史的始终是合法 JSON。
+- **降级**：`RAG_MCP_ENABLED=false` 时工具返回 `status=disabled`；MCP 启动失败时服务仍可用，
+  `GET /health` 返回 `{"status":"ok","mcp":"error: ..."}`。
+
 ## 评测
 
 快速离线 smoke test 使用 `evaluation/eval_tasks.json`，不经过 Agent 主循环：

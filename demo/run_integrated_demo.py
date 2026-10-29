@@ -77,23 +77,19 @@ class Check:
 
 @dataclass
 class EventLog:
-    """收集 Agent 事件，并抽取知识库调用结果。"""
+    """收集 Agent 事件；知识库结果直接取 ``knowledge_result`` 事件。
+
+    不用解析 observation 文本：非 success 状态会在 observation 后追加
+    ``[系统约束]``，文本不再是纯 JSON。
+    """
 
     entries: list[dict[str, Any]] = field(default_factory=list)
     knowledge: list[dict[str, Any]] = field(default_factory=list)
 
     async def __call__(self, event: str, data: dict[str, Any]) -> None:
         self.entries.append({"event": event, **data})
-        if event == "tool_output":
-            output = data.get("output") or ""
-            prefix = "工具输出(JSON): "
-            if output.startswith(prefix):
-                try:
-                    payload = json.loads(output[len(prefix):])
-                except json.JSONDecodeError:
-                    return
-                if "status" in payload:
-                    self.knowledge.append(payload)
+        if event == "knowledge_result":
+            self.knowledge.append(data)
 
 
 def _ensure_utf8_stdout() -> None:

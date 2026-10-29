@@ -26,6 +26,52 @@ _SKELETON_KEYS = ("status", "route", "run_id", "failure_type", "citations", "mes
 _CITATIONS_KEEP = 6
 _MESSAGE_KEEP = 60
 
+#: 非 success 状态的运行时硬约束。写进下一轮的历史消息，而不是只依赖系统提示词——
+#: 提示词是概率性的，而"证据门控不被绕过"必须是确定性的。
+_STATUS_CONSTRAINTS: dict[str, str] = {
+    "abstain": (
+        "知识库返回 abstain（证据不足）。不得基于常识或推测补充答案；"
+        "请如实说明当前知识库没有足够证据，并给出可执行的下一步"
+        "（补充文档、缩小问题范围或改用匹配的知识库）。"
+    ),
+    "clarify": (
+        "知识库返回 clarify（问题存在歧义）。先向用户确认歧义点，"
+        "不要自行假设后作答。"
+    ),
+    "verification_failed": (
+        "知识库返回 verification_failed（引用校验未通过）。"
+        "不得把该结论当作事实陈述，需说明结论未通过校验。"
+    ),
+    "disabled": (
+        "知识库工具未启用。不得假装已查询过知识库，"
+        "需告知用户该能力当前不可用。"
+    ),
+    "error": (
+        "知识库调用返回 error（配置或索引问题）。"
+        "如实说明原因，不要用常识替代证据。"
+    ),
+}
+
+
+def constraint_for(payload: Any) -> str:
+    """按知识库返回状态生成运行时约束，不需要约束时返回空串。
+
+    Args:
+        payload: 工具返回值；非字典或 status 为 success 时返回空串
+
+    Returns:
+        带 ``[系统约束]`` 前缀的约束文本
+    """
+    if not isinstance(payload, dict):
+        return ""
+    template = _STATUS_CONSTRAINTS.get(str(payload.get("status")))
+    if not template:
+        return ""
+    run_id = payload.get("run_id")
+    suffix = f"（run_id={run_id}）" if run_id else ""
+    return f"[系统约束] {template}{suffix}"
+
+
 
 async def _run_knowledge_search(validated_input: Any) -> dict[str, Any]:
     """调用知识库后端；后端未启用时返回 disabled，由 Agent 如实告知。"""
