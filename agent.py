@@ -17,6 +17,7 @@ from config import (
     EMIT_THOUGHT,
     LLM_TIMEOUT,
     MAX_STEPS,
+    RAG_MCP_TOOL_TIMEOUT,
     TOOL_TIMEOUT,
 )
 from context import compress_conversation, should_compress
@@ -24,7 +25,7 @@ from logger import log_event
 from parser import parse_response
 from prompts import build_system_prompt
 from tool_dispatch import execute_tool_async, format_observation
-from tools import TOOL_REGISTRY
+from tools import LOCAL_TOOL_REGISTRY, TOOL_REGISTRY
 
 EventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 LLMCallable = Callable[[list[dict[str, str]], str | None, str, int | None], Awaitable[str]]
@@ -296,10 +297,13 @@ def _validate_tool_input(model_cls: BaseModel, tool_input: Any) -> Any:
 def _tool_timeout(tool_name: str) -> float:
     """按工具返回超时秒数。
 
-    阶段 2 接入 MCP 后，MCP 工具改用独立的 ``RAG_MCP_TOOL_TIMEOUT``（跨进程调用更慢）；
-    这里读模块级常量而非配置快照，便于测试 monkeypatch。
+    本地工具是进程内文件 IO，用 ``TOOL_TIMEOUT``；MCP 工具是跨进程调用，RAG 内部
+    最多 2 轮检索 + 1 轮 LLM 反思，用独立的 ``RAG_MCP_TOOL_TIMEOUT``。两者都读模块级
+    常量而非配置快照，便于测试 monkeypatch。
     """
-    return TOOL_TIMEOUT
+    if tool_name in LOCAL_TOOL_REGISTRY:
+        return TOOL_TIMEOUT
+    return RAG_MCP_TOOL_TIMEOUT
 
 
 async def _run_tool(

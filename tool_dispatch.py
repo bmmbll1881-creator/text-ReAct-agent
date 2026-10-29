@@ -13,6 +13,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from config import MAX_OBSERVATION_CHARS
+from knowledge_backend import get_backend
 from tools import LOCAL_TOOL_REGISTRY, MCP_TOOL_SPECS, available_tools, execute_tool
 
 #: 截断时保留的证据条数与预览长度
@@ -26,26 +27,42 @@ _CITATIONS_KEEP = 6
 _MESSAGE_KEEP = 60
 
 
-async def execute_tool_async(tool_name: str, validated_input: BaseModel) -> str:
-    """执行任意已注册工具并返回 observation 文本。
+async def _run_knowledge_search(validated_input: Any) -> dict[str, Any]:
+    """调用知识库后端；后端未启用时返回 disabled，由 Agent 如实告知。"""
+    return await get_backend().search(
+        validated_input.question, validated_input.knowledge_base
+    )
 
-    本地工具是可阻塞的文件 IO，放进线程池执行；MCP 工具（阶段 2 接入）
-    直接 await 异步客户端。调用方只看到统一的异步接口。
+
+#: MCP 工具名 -> 执行协程。新增 MCP 工具时只需在这里加一行。
+_MCP_HANDLERS: dict[str, Any] = {
+    "knowledge_search": _run_knowledge_search,
+}
+
+
+async def execute_tool_async(tool_name: str, validated_input: BaseModel) -> str | dict[str, Any]:
+    """执行任意已注册工具。
+
+    本地工具是可阻塞的文件 IO，放进线程池执行；MCP 工具直接 await 异步客户端。
+    调用方只看到统一的异步接口，不需要区分工具来源。
 
     Args:
         tool_name: 工具名称
         validated_input: 已通过 Pydantic 校验的入参实例
 
     Returns:
-        工具输出文本；本地工具返回原始字符串，结构化结果返回 JSON 字符串
+        本地工具返回 ``str``；MCP 工具返结构化 ``dict``（由 ``format_observation`` 序列化）
 
     Raises:
-        ValueError: 工具未注册，或该工具尚未接入执行器
+        ValueError: 工具未注册，或注册了但没接执行器
     """
     if tool_name in LOCAL_TOOL_REGISTRY:
         return await asyncio.to_thread(execute_tool, tool_name, validated_input)
+    handler = _MCP_HANDLERS.get(tool_name)
+    if handler is not None:
+        return await handler(validated_input)
     if tool_name in MCP_TOOL_SPECS:
-        raise ValueError(f"MCP 工具 {tool_name} 尚未接入客户端")
+        raise ValueError(f"MCP 工具 {tool_name} 尚未接入执行器")
     raise ValueError(f"未知工具：{tool_name}；可用工具：{available_tools()}")
 
 

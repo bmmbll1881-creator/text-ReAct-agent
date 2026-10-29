@@ -30,6 +30,19 @@ class WriteFileInput(BaseModel):
     mode: Literal["w", "a"] = Field("w", description="w 覆盖，a 追加")
     model_config = ConfigDict(extra="forbid")
 
+
+class KnowledgeSearchInput(BaseModel):
+    """知识库查询的输入参数。
+
+    ``knowledge_base`` 不枚举具体取值：别名由 RAG 侧配置（RAG_KB_ALIASES）决定，
+    写死在 Agent 里会在换知识库时失效。传错时服务端会报错并列出可用知识库。
+    """
+    question: str = Field(..., min_length=1, description="需要从知识库回答的问题")
+    knowledge_base: str | None = Field(
+        None, description="知识库别名、名称或 ID；缺省使用服务端默认知识库"
+    )
+    model_config = ConfigDict(extra="forbid")
+
 def safe_path(relative_path: str) -> Path:
     """解析相对路径，并拒绝工作目录外的访问。"""
     norm_path = os.path.normpath(relative_path)
@@ -102,7 +115,16 @@ LOCAL_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
 }
 
 #: MCP 工具只描述契约，不在这里执行（异步客户端由 tool_dispatch 负责）。
-MCP_TOOL_SPECS: dict[str, dict[str, Any]] = {}
+MCP_TOOL_SPECS: dict[str, dict[str, Any]] = {
+    "knowledge_search": {
+        "model": KnowledgeSearchInput,
+        "description": (
+            "查询已配置的 RAG 知识库并返回带 [S1] 引用的证据化答案；"
+            "status 非 success 时不得自行作答"
+        ),
+        "input_schema": KnowledgeSearchInput.model_json_schema(),
+    },
+}
 
 #: 合并视图：Agent 校验入参、生成提示词时必须看到全部工具。
 TOOL_REGISTRY: dict[str, dict[str, Any]] = {**LOCAL_TOOL_REGISTRY, **MCP_TOOL_SPECS}

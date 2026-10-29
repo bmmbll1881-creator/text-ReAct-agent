@@ -1,11 +1,15 @@
 # Runtime dependencies (pinned for reproducible deployments)
 python-dotenv==1.0.1
 redis==5.2.1
-pydantic==2.10.6
+pydantic==2.14.1
 httpx==0.28.1
 tenacity==9.0.0
 fastapi==0.115.6
+starlette==0.41.3
 uvicorn[standard]==0.34.0
+mcp>=1.0,<2.0
+# mcp 默认拉 sse-starlette 3.x，会把 starlette 顶到 1.x，与 fastapi 0.115 的 <0.42 冲突
+sse-starlette<3
 
 # Test dependencies
 pytest==8.3.4

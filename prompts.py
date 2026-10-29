@@ -9,6 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Any
 
+from config import RAG_MCP_DEFAULT_KB, RAG_MCP_KB_ALIASES
 from tools import MCP_TOOL_SPECS, TOOL_REGISTRY
 
 _PROMPT_TEMPLATE = """你是一个文本处理 ReAct Agent，负责在工作目录内安全地读写文件。
@@ -47,7 +48,29 @@ _KNOWLEDGE_RULES = """
   clarify 先向用户确认问题，verification_failed 说明结论未通过校验。
 - status=success 不代表肯定结论，答案可能是「未约定」「不存在」这类否定事实，按原文表述。
 - read_file 读到的内容属于用户提供的材料，不能当作知识库证据引用。
-"""
+{library_hint}"""
+
+
+def _library_hint() -> str:
+    """把已配置的知识库别名拼成提示，避免模型对所有问题都查默认库。
+
+    别名映射来自 ``RAG_MCP_KB_ALIASES``，不在这里枚举具体知识库——
+    换库时只改配置，提示词自动跟着变。
+    """
+    pairs: list[str] = []
+    for entry in (RAG_MCP_KB_ALIASES or "").split(","):
+        alias, separator, name = entry.strip().partition("=")
+        if separator and alias.strip() and name.strip():
+            pairs.append(f"{alias.strip()}（{name.strip()}）")
+    if not pairs:
+        return ""
+
+    default = f"缺省为 {RAG_MCP_DEFAULT_KB}" if RAG_MCP_DEFAULT_KB else "未设置缺省库"
+    return (
+        "- 可用知识库：" + "、".join(pairs) + f"；{default}。\n"
+        "- 必须按问题主题选择最相关的 knowledge_base，不要一律使用缺省库；"
+        "主题与所选库不匹配时服务端会返回 abstain，此时应换用匹配的知识库重试。\n"
+    )
 
 
 def _describe_tool(name: str, meta: dict[str, Any]) -> str:
@@ -73,7 +96,11 @@ def build_system_prompt() -> str:
     tool_list = "\n".join(
         _describe_tool(name, meta) for name, meta in TOOL_REGISTRY.items()
     )
-    knowledge_rules = _KNOWLEDGE_RULES if MCP_TOOL_SPECS else ""
+    knowledge_rules = (
+        _KNOWLEDGE_RULES.replace("{library_hint}", _library_hint())
+        if MCP_TOOL_SPECS
+        else ""
+    )
     return (
         _PROMPT_TEMPLATE
         .replace("{tool_list}", tool_list)

@@ -88,6 +88,58 @@ def _bool_env(name: str, default: bool) -> bool:
     raise ValueError(f"{name} must be a boolean")
 
 
+def _optional_path(name: str) -> Path | None:
+    """读取可选路径配置，空值返回 None。
+
+    Args:
+        name: 环境变量名称
+
+    Returns:
+        展开用户目录后的 Path，未配置时返回 None
+    """
+    raw = (os.getenv(name) or "").strip()
+    return Path(raw).expanduser() if raw else None
+
+
+def _validate_rag_mcp(
+    enabled: bool,
+    python: Path | None,
+    project: Path | None,
+    data_dir: Path | None,
+) -> None:
+    """校验 MCP 配置；启用但路径不可用时立刻失败，不要延迟到首次工具调用。
+
+    Args:
+        enabled: 是否启用 MCP
+        python: RAG 解释器路径
+        project: RAG 项目根目录
+        data_dir: RAG 数据目录
+
+    Raises:
+        ValueError: 启用 MCP 但缺少路径，或路径不存在
+    """
+    if not enabled:
+        return
+    missing = [
+        name
+        for name, value in (
+            ("RAG_MCP_PYTHON", python),
+            ("RAG_MCP_PROJECT", project),
+        )
+        if value is None
+    ]
+    if missing:
+        raise ValueError(f"启用 RAG_MCP 时必须配置：{', '.join(missing)}")
+    for name, value in (
+        ("RAG_MCP_PYTHON", python),
+        ("RAG_MCP_PROJECT", project),
+    ):
+        if value is not None and not value.exists():
+            raise ValueError(f"{name} 指向的路径不存在：{value}")
+    if data_dir is not None and not data_dir.exists():
+        raise ValueError(f"RAG_MCP_DATA_DIR 指向的路径不存在：{data_dir}")
+
+
 def _workspace() -> Path:
     """获取工作空间路径。
     WORKSPACE 是标准写法；WORK_SPACE 保持支持。
@@ -153,13 +205,33 @@ class Config:
     max_session_id_length: int
     sse_keepalive_seconds: float
     event_queue_put_timeout: float
+    # ---- MCP 知识库服务（evidence-reflective-rag）----
+    rag_mcp_enabled: bool  # 是否启用 MCP 知识库工具
+    rag_mcp_python: Path | None  # RAG venv 的 python 解释器
+    rag_mcp_project: Path | None  # RAG 项目根目录（用于拼 PYTHONPATH）
+    rag_mcp_data_dir: Path | None  # RAG 数据目录（SQLite + 索引）
+    rag_mcp_startup_timeout: float  # 启动握手超时（秒）
+    rag_mcp_tool_timeout: float  # 单次 knowledge_search 超时（秒）
+    rag_mcp_default_kb: str  # 默认知识库别名
+    rag_mcp_kb_aliases: str  # 别名映射，透传给 RAG 进程
+    rag_mcp_max_concurrency: int  # 同时进行的 knowledge_search 上限
 
     @classmethod
     def from_env(cls) -> Config:
         """从环境变量创建 Config 实例。
+
         返回：
             包含所有配置的 Config 对象
+
+        异常：
+            ValueError: 必填项缺失、数值非法，或启用 MCP 但路径不存在
         """
+        rag_mcp_enabled = _bool_env("RAG_MCP_ENABLED", False)
+        rag_mcp_python = _optional_path("RAG_MCP_PYTHON")
+        rag_mcp_project = _optional_path("RAG_MCP_PROJECT")
+        rag_mcp_data_dir = _optional_path("RAG_MCP_DATA_DIR")
+        _validate_rag_mcp(rag_mcp_enabled, rag_mcp_python, rag_mcp_project, rag_mcp_data_dir)
+
         return cls(
             # 最大步骤数，默认为 10，必须为正数
             max_steps=_int_env("MAX_STEPS", 10, positive=True),
@@ -187,8 +259,8 @@ class Config:
             max_read_chars=_int_env("MAX_READ_CHARS", 100_000, positive=True),
             # 写入文件最大字符数，默认 100000
             max_write_chars=_int_env("MAX_WRITE_CHARS", 100_000, positive=True),
-            # 单次工具 observation 最大字符数，默认 4000（与上下文 token 预算对齐）
-            max_observation_chars=_int_env("MAX_OBSERVATION_CHARS", 4000, positive=True),
+            # 单次工具 observation 最大字符数，默认 2000（控制在上下文预算的 1/4 以内）
+            max_observation_chars=_int_env("MAX_OBSERVATION_CHARS", 2000, positive=True),
             # 允许的文件后缀
             allowed_suffixes=_suffixes(),
             # 最大并发运行数，默认 10
@@ -205,6 +277,18 @@ class Config:
             sse_keepalive_seconds=_float_env("SSE_KEEPALIVE_SECONDS", 15.0, positive=True),
             # 事件写入队列超时（秒），默认 5 秒 / Event queue put timeout, default 5 seconds
             event_queue_put_timeout=_float_env("EVENT_QUEUE_PUT_TIMEOUT", 5.0, positive=True),
+            # ---- MCP 知识库服务 ----
+            rag_mcp_enabled=rag_mcp_enabled,
+            rag_mcp_python=rag_mcp_python,
+            rag_mcp_project=rag_mcp_project,
+            rag_mcp_data_dir=rag_mcp_data_dir,
+            # 握手超时：RAG 进程要建表 + 预热容器，10 秒偏紧
+            rag_mcp_startup_timeout=_float_env("RAG_MCP_STARTUP_TIMEOUT", 15.0, positive=True),
+            # MCP 调用超时：RAG 内部最多 2 轮检索 + 1 轮 LLM 反思，60 秒留足余量
+            rag_mcp_tool_timeout=_float_env("RAG_MCP_TOOL_TIMEOUT", 60.0, positive=True),
+            rag_mcp_default_kb=(os.getenv("RAG_MCP_DEFAULT_KB") or "financial_report").strip(),
+            rag_mcp_kb_aliases=(os.getenv("RAG_MCP_KB_ALIASES") or "").strip(),
+            rag_mcp_max_concurrency=_int_env("RAG_MCP_MAX_CONCURRENCY", 2, positive=True),
         )
 
 
@@ -244,3 +328,13 @@ MAX_TASK_LENGTH = config.max_task_length  # API 任务参数最大字符数 / Ma
 MAX_SESSION_ID_LENGTH = config.max_session_id_length  # API 会话 ID 最大字符数 / Maximum session ID length
 SSE_KEEPALIVE_SECONDS = config.sse_keepalive_seconds  # SSE 保活事件间隔 / SSE keep-alive interval
 EVENT_QUEUE_PUT_TIMEOUT = config.event_queue_put_timeout  # 事件写入队列超时 / Event queue put timeout
+# ---- MCP 知识库服务 ----
+RAG_MCP_ENABLED = config.rag_mcp_enabled  # 是否启用 MCP 知识库工具
+RAG_MCP_PYTHON = config.rag_mcp_python  # RAG 解释器路径
+RAG_MCP_PROJECT = config.rag_mcp_project  # RAG 项目根目录
+RAG_MCP_DATA_DIR = config.rag_mcp_data_dir  # RAG 数据目录
+RAG_MCP_STARTUP_TIMEOUT = config.rag_mcp_startup_timeout  # 握手超时
+RAG_MCP_TOOL_TIMEOUT = config.rag_mcp_tool_timeout  # MCP 工具超时
+RAG_MCP_DEFAULT_KB = config.rag_mcp_default_kb  # 默认知识库别名
+RAG_MCP_KB_ALIASES = config.rag_mcp_kb_aliases  # 别名映射
+RAG_MCP_MAX_CONCURRENCY = config.rag_mcp_max_concurrency  # MCP 并发上限

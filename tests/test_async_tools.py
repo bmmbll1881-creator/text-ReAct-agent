@@ -6,11 +6,20 @@ import json
 import pytest
 
 import agent
+import knowledge_backend
 import prompts
 import tool_dispatch
 from budget import BudgetExceeded
 from prompts import build_system_prompt
-from tools import MCP_TOOL_SPECS, ReadFileInput, WriteFileInput, execute_tool
+from tools import (
+    LOCAL_TOOL_REGISTRY,
+    MCP_TOOL_SPECS,
+    TOOL_REGISTRY,
+    KnowledgeSearchInput,
+    ReadFileInput,
+    WriteFileInput,
+    execute_tool,
+)
 
 
 class FakeBudget:
@@ -212,6 +221,96 @@ def test_format_observation_hard_truncates_when_nothing_fits():
     assert text.endswith("…(已截断)")
 
 
+def test_system_prompt_lists_knowledge_base_aliases(monkeypatch):
+    """提示词必须带上可用知识库，否则模型会对所有问题都用缺省库。"""
+    monkeypatch.setattr(prompts, "RAG_MCP_KB_ALIASES", "financial_report=财务报告,contract=合同条款")
+    monkeypatch.setattr(prompts, "RAG_MCP_DEFAULT_KB", "financial_report")
+    prompts.build_system_prompt.cache_clear()
+    try:
+        prompt = build_system_prompt()
+        assert "可用知识库：financial_report（财务报告）、contract（合同条款）" in prompt
+        assert "缺省为 financial_report" in prompt
+        assert "按问题主题选择最相关的 knowledge_base" in prompt
+    finally:
+        monkeypatch.undo()
+        prompts.build_system_prompt.cache_clear()
+
+
+# ---------------------------------------------------------------- 知识库工具
+
+
+def test_knowledge_search_is_registered_as_mcp_spec():
+    """MCP 工具只进契约表，不带 func——执行必须走分派层。"""
+    spec = MCP_TOOL_SPECS["knowledge_search"]
+
+    assert spec["model"] is KnowledgeSearchInput
+    assert "func" not in spec
+    assert "knowledge_search" in TOOL_REGISTRY
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_async_routes_to_backend():
+    stub = knowledge_backend.StubKnowledgeBackend(
+        {"status": "success", "answer": "营收 100 万 [S1]", "citations": ["S1"]}
+    )
+    knowledge_backend.set_backend(stub)
+    try:
+        result = await tool_dispatch.execute_tool_async(
+            "knowledge_search",
+            KnowledgeSearchInput(question="营收多少", knowledge_base="contract"),
+        )
+    finally:
+        knowledge_backend.set_backend(None)
+
+    assert result["status"] == "success"
+    assert stub.calls == [("营收多少", "contract")]
+
+
+@pytest.mark.asyncio
+async def test_disabled_backend_returns_disabled_status():
+    knowledge_backend.set_backend(None)
+
+    result = await tool_dispatch.execute_tool_async(
+        "knowledge_search", KnowledgeSearchInput(question="营收多少")
+    )
+
+    assert result["status"] == "disabled"
+    assert result["answer"] is None
+
+
+@pytest.mark.asyncio
+async def test_knowledge_result_reaches_observation_as_json():
+    """端到端（不启子进程）：工具返回 dict → observation 是合法 JSON 且保留引用。"""
+    stub = knowledge_backend.StubKnowledgeBackend({
+        "status": "success",
+        "route": "success",
+        "answer": "2025年第三季度营业收入为100万元。 [S1]",
+        "citations": ["S1"],
+        "run_id": "run_1",
+    })
+    knowledge_backend.set_backend(stub)
+    seen: list[str] = []
+
+    async def llm(messages, _skill=None, _session="", _step=None):
+        seen.append(messages[-1]["content"])
+        if len(seen) == 1:
+            return (
+                'Action: knowledge_search\n'
+                'Action Input: {"question": "2025Q3 营收是多少"}'
+            )
+        return "Final Answer: 营收 100 万元 [S1]"
+
+    try:
+        assert await run("kb", llm, tool_dispatch.execute_tool_async) == "营收 100 万元 [S1]"
+    finally:
+        knowledge_backend.set_backend(None)
+
+    body = json.loads(seen[1].removeprefix("工具输出(JSON): "))
+    assert body["status"] == "success"
+    assert body["citations"] == ["S1"]
+    assert body["run_id"] == "run_1"
+
+
 # ---------------------------------------------------------------- 提示词
 
 
@@ -220,8 +319,22 @@ def test_system_prompt_lists_registered_tools():
 
     assert "read_file" in prompt and "write_file" in prompt
     assert "输入：path（必填）" in prompt
-    assert "knowledge_search" not in prompt
-    assert "知识库规则" not in prompt
+    assert "knowledge_search" in prompt
+    assert "知识库规则" in prompt
+
+
+def test_system_prompt_omits_knowledge_rules_without_mcp_tool(monkeypatch):
+    """注册表里没有 MCP 工具时，不该教模型调用不存在的能力。"""
+    monkeypatch.setattr(prompts, "TOOL_REGISTRY", dict(LOCAL_TOOL_REGISTRY))
+    monkeypatch.setattr(prompts, "MCP_TOOL_SPECS", {})
+    prompts.build_system_prompt.cache_clear()
+    try:
+        prompt = build_system_prompt()
+        assert "知识库规则" not in prompt
+        assert "knowledge_search" not in prompt
+    finally:
+        monkeypatch.undo()
+        prompts.build_system_prompt.cache_clear()
 
 
 def test_system_prompt_keeps_single_braces_in_format_example():
